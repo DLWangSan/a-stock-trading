@@ -96,5 +96,10 @@ Thumbs.db
 .AppleDouble
 .LSOverride
 
-
+# Frontend
+stock_frontend/node_modules/
+stock_frontend/dist/
+stock_frontend/.vite/
+stock_frontend/.env.local
+stock_frontend/.env.*.local
 

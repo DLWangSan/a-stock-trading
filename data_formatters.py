@@ -334,7 +334,7 @@ def to_json(data_dict):
                     record[key] = str(value)
         return records
     
-    return {
+    result = {
         'code': data_dict['code'],
         'timestamp': data_dict['timestamp'],
         'realtime': data_dict['realtime'],
@@ -346,6 +346,25 @@ def to_json(data_dict):
         'sector_info': data_dict.get('sector_info', []),
         'money_flow': data_dict.get('money_flow', {}),
     }
+    
+    # 添加技术指标、基本面、行业对比数据
+    if 'indicators' in data_dict:
+        result['indicators'] = data_dict['indicators']
+    
+    if 'fundamental' in data_dict:
+        result['fundamental'] = data_dict['fundamental']
+    
+    if 'industry_comparison' in data_dict:
+        result['industry_comparison'] = data_dict['industry_comparison']
+    
+    # 添加计数字段
+    result['daily_count'] = len(data_dict['daily']) if data_dict.get('daily') is not None else 0
+    result['minute_5_count'] = len(data_dict['minute_5']) if data_dict.get('minute_5') is not None else 0
+    result['minute_15_count'] = len(data_dict['minute_15']) if data_dict.get('minute_15') is not None else 0
+    result['minute_30_count'] = len(data_dict['minute_30']) if data_dict.get('minute_30') is not None else 0
+    result['timeline_count'] = len(data_dict['timeline']) if data_dict.get('timeline') is not None else 0
+    
+    return result
 
 
 # ==================== Flask API 接口 ====================

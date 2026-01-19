@@ -23,7 +23,16 @@ def register_routes():
     from api_routes import register_routes as register
     register(app)
 
+def init_database():
+    """初始化数据库和默认配置"""
+    try:
+        from init_agents import init_default_agents
+        init_default_agents()
+    except Exception as e:
+        print(f"[初始化] 数据库初始化失败: {e}")
+
 register_routes()
+init_database()
 
 if __name__ == '__main__':
     print("=" * 60)
