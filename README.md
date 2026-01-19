@@ -95,7 +95,7 @@ GitHub 上已有若干优秀的 Trading Agent 项目，但往往需要配合数�
 ### 1. 后端部署 (Python Flask)
 ```bash
 # 克隆项目
-git clone https://github.com/YOUR_USERNAME/a-stock-trading.git
+git clone https://github.com/DLWangSan/a-stock-trading.git
 cd a-stock-trading
 
 # 安装依赖
