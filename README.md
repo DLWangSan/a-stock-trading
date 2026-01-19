@@ -122,7 +122,8 @@ npm run dev
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=DLWangSan/a-stock-trading&type=Date)](https://star-history.com/#DLWangSan/a-stock-trading&Date)
+
+[![Star History Chart](https://api.star-history.com/svg?repos=DLWangSan/a-stock-trading&type=date&legend=bottom-right)](https://www.star-history.com/#DLWangSan/a-stock-trading&type=date&legend=bottom-right)
 
 ---
 
