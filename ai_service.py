@@ -5,6 +5,7 @@
 import requests
 import json
 import os
+import time
 from typing import Dict, Optional
 
 class AIService:
@@ -23,7 +24,7 @@ class AIService:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
-        response = requests.post(url, headers=headers, json=data, timeout=60)
+        response = requests.post(url, headers=headers, json=data, timeout=120)
         response.raise_for_status()
         result = response.json()
         return result["choices"][0]["message"]["content"]
@@ -41,7 +42,7 @@ class AIService:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
-        response = requests.post(url, headers=headers, json=data, timeout=60)
+        response = requests.post(url, headers=headers, json=data, timeout=120)
         response.raise_for_status()
         result = response.json()
         return result["choices"][0]["message"]["content"]
@@ -60,7 +61,7 @@ class AIService:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
-        response = requests.post(url, headers=headers, json=data, timeout=60)
+        response = requests.post(url, headers=headers, json=data, timeout=120)
         response.raise_for_status()
         result = response.json()
         return result["choices"][0]["message"]["content"]
@@ -74,7 +75,7 @@ class AIService:
                 "parts": [{"text": prompt}]
             }]
         }
-        response = requests.post(url, json=data, timeout=60)
+        response = requests.post(url, json=data, timeout=120)
         response.raise_for_status()
         result = response.json()
         return result["candidates"][0]["content"]["parts"][0]["text"]
@@ -93,7 +94,7 @@ class AIService:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
-        response = requests.post(url, headers=headers, json=data, timeout=60)
+        response = requests.post(url, headers=headers, json=data, timeout=120)
         response.raise_for_status()
         result = response.json()
         return result["choices"][0]["message"]["content"]
@@ -111,8 +112,20 @@ class AIService:
         
         if provider not in provider_map:
             raise ValueError(f"不支持的AI提供商: {provider}")
-        
-        return provider_map[provider](api_key, model, prompt)
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                return provider_map[provider](api_key, model, prompt)
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+                last_error = e
+                # 简单退避，避免短时间频繁超时
+                time.sleep(1 + attempt * 2)
+            except Exception as e:
+                last_error = e
+                break
+
+        raise last_error
     
     @staticmethod
     def get_models(provider: str, api_key: str) -> list:

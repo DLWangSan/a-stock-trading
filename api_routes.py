@@ -13,6 +13,8 @@ import re
 from data_fetchers import get_realtime_data, get_timeline_data, get_minute_kline, get_daily_kline, get_money_flow, get_money_flow_history, get_money_flow_realtime_kline, get_fundamental_data, get_industry_comparison, get_news_from_stock, get_guba_posts
 from technical_indicators import get_comprehensive_data, get_comprehensive_data_with_indicators
 from data_formatters import format_for_ai, to_json
+import requests
+from datetime import date, timedelta
 from models import get_db, SessionLocal
 from db import (
     get_watchlist, add_to_watchlist, remove_from_watchlist, update_watchlist_order,
@@ -49,6 +51,7 @@ def register_routes(app):
                 '/api/sentiment/news/<code>': '获取股票相关新闻，参数: ?days=7',
                 '/api/sentiment/posts/<code>': '获取股吧帖子（最新+热门），参数: ?latest=10&hot=10',
                 '/api/sentiment/all/<code>': '获取完整舆情数据（新闻+帖子），参数: ?days=7&latest=10&hot=10',
+                '/api/strategy/strong_stocks': '获取强势股（前两个交易日10:30前涨停，当前未涨停）',
                 '/api/watchlist': '自选股管理，GET获取列表，POST添加',
                 '/api/watchlist/<code>': '自选股管理，DELETE删除',
                 '/api/config': '配置管理，GET获取所有配置，POST设置配置',
@@ -57,6 +60,7 @@ def register_routes(app):
                 '/api/agents/<id>': 'Agent管理，PUT更新，DELETE删除',
                 '/api/ai/analyze/<code>': 'AI分析股票，POST请求，body: {"agent_id": 1}',
                 '/api/ai/debate/start/<code>': '启动多Agent辩论任务，POST请求',
+                '/api/ai/debate/start_multi': '启动多选一辩论任务，POST: codes, agent_ids, decision_agent_id, analysis_rounds, debate_rounds',
                 '/api/ai/debate/status/<job_id>': '查询多Agent辩论任务状态',
                 '/api/ai/debate/jobs': '获取辩论任务列表，参数: ?status=active|completed|failed|canceled',
                 '/api/ai/debate/stop/<job_id>': '终止辩论任务，POST请求',
@@ -797,6 +801,7 @@ def register_routes(app):
             'agent_ids': agent_info.get('agent_ids', []),
             'analysis_rounds': agent_info.get('analysis_rounds', 3),
             'debate_rounds': agent_info.get('debate_rounds', 3),
+            'meta': agent_info.get('meta', {}),
             'status': job.status,
             'progress': job.progress,
             'steps': steps,
@@ -889,7 +894,10 @@ def register_routes(app):
                     }
                     for future in as_completed(futures):
                         agent = futures[future]
-                        result = future.result()
+                        try:
+                            result = future.result()
+                        except Exception as e:
+                            result = f"[ERROR] {agent.name} analysis failed: {str(e)}"
                         analysis_memory[agent.id].append(result)
                         steps.append({
                             'phase': 'analysis',
@@ -941,7 +949,10 @@ def register_routes(app):
                     }
                     for future in as_completed(futures):
                         agent = futures[future]
-                        result = future.result()
+                        try:
+                            result = future.result()
+                        except Exception as e:
+                            result = f"[ERROR] {agent.name} debate failed: {str(e)}"
                         item = {
                             'phase': 'debate',
                             'round': round_idx,
@@ -979,12 +990,229 @@ def register_routes(app):
                 "Please output the report in Chinese."
             )
 
-            report_md = AIService.call_agent(operator_provider, operator_api_key, operator_model, operator_prompt)
-
-            _update_debate_job(db, job_id, status='completed', progress=100, report_md=report_md, steps=steps)
+            try:
+                report_md = AIService.call_agent(operator_provider, operator_api_key, operator_model, operator_prompt)
+                _update_debate_job(db, job_id, status='completed', progress=100, report_md=report_md, steps=steps, error=None)
+            except Exception as e:
+                fallback_report = (
+                    "## 报告生成失败（已提供原始记录）\n\n"
+                    f"- Error: {str(e)}\n\n"
+                    "### 原始辩论记录（节选）\n\n"
+                    f"{transcript[:8000]}\n\n"
+                    "请稍后重试生成报告。"
+                )
+                _update_debate_job(db, job_id, status='completed', progress=100, report_md=fallback_report, steps=steps, error=None)
         except Exception as e:
             error_msg = str(e)
             print(f"[API] 辩论分析失败: {error_msg}")
+            _update_debate_job(db, job_id, status='failed', error=error_msg)
+        finally:
+            db.close()
+
+    def _run_multi_select_job(job_id, codes, agent_ids, analysis_rounds, debate_rounds):
+        db = SessionLocal()
+        try:
+            _update_debate_job(db, job_id, status='running', progress=5)
+
+            agents = []
+            for agent_id in agent_ids:
+                agent = get_agent(db, agent_id)
+                if not agent or not agent.enabled:
+                    raise ValueError(f'Agent不存在或未启用: {agent_id}')
+                agents.append(agent)
+
+            default_model_map = {
+                'openai': 'gpt-3.5-turbo',
+                'deepseek': 'deepseek-chat',
+                'qwen': 'qwen-turbo',
+                'gemini': 'gemini-pro',
+                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct'
+            }
+
+            # 固定裁判，不使用数据库Agent
+            operator_provider = get_config(db, 'default_ai_provider', 'openai')
+            operator_api_key = get_config(db, f'{operator_provider}_api_key')
+            if not operator_api_key:
+                raise ValueError(f'未配置{operator_provider} API Key')
+            operator_model = get_config(db, f'{operator_provider}_model', default_model_map.get(operator_provider, 'gpt-3.5-turbo'))
+
+            # 获取多股票数据
+            stock_blocks = []
+            for code_str in codes:
+                try:
+                    stock_data = get_comprehensive_data_with_indicators(code_str)
+                    formatted = format_for_ai(stock_data)
+                    stock_name = ''
+                    try:
+                        stock_name = stock_data.get('realtime', {}).get('name', '')
+                    except Exception:
+                        stock_name = ''
+                    stock_blocks.append(f"Stock {code_str} {stock_name}:\n{formatted}")
+                except Exception as e:
+                    stock_blocks.append(f"Stock {code_str}:\nData unavailable: {str(e)}")
+
+            combined_data = "\n\n".join(stock_blocks)
+            multi_instruction = (
+                "You must choose exactly ONE stock to invest in from the list below. "
+                "A capital MUST be allocated to one of these stocks. "
+                "Provide your preferred choice and reasoning from your unique perspective."
+            )
+
+            def resolve_agent_config(agent):
+                provider = agent.ai_provider or get_config(db, 'default_ai_provider', 'openai')
+                api_key = get_config(db, f'{provider}_api_key')
+                if not api_key:
+                    raise ValueError(f'未配置{provider} API Key')
+                model = agent.model or get_config(db, f'{provider}_model', default_model_map.get(provider, 'gpt-3.5-turbo'))
+                return provider, api_key, model
+
+            steps = []
+            analysis_memory = {agent.id: [] for agent in agents}
+
+            # 多轮分析
+            for round_idx in range(1, analysis_rounds + 1):
+                if _is_job_canceled(db, job_id):
+                    _update_debate_job(db, job_id, status='canceled')
+                    return
+                prompts = []
+                for agent in agents:
+                    prev_analysis = "\n\n".join(analysis_memory[agent.id][-2:]) if analysis_memory[agent.id] else "None"
+                    prompts.append((
+                        agent,
+                        f"{agent.prompt}\n\n"
+                        "Multi-Stock Selection Task:\n"
+                        f"{combined_data}\n\n"
+                        f"{multi_instruction}\n\n"
+                        f"Round {round_idx} Analysis:\n"
+                        "Provide new insights and clearly state your preferred stock.\n\n"
+                        f"Previous Analysis (if any):\n{prev_analysis}\n\n"
+                        "Please provide your analysis in Chinese."
+                    ))
+
+                with ThreadPoolExecutor(max_workers=min(6, len(prompts))) as executor:
+                    futures = {
+                        executor.submit(
+                            AIService.call_agent,
+                            *resolve_agent_config(agent),
+                            prompt
+                        ): agent
+                        for agent, prompt in prompts
+                    }
+                    for future in as_completed(futures):
+                        agent = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as e:
+                            result = f"[ERROR] {agent.name} analysis failed: {str(e)}"
+                        analysis_memory[agent.id].append(result)
+                        steps.append({
+                            'phase': 'analysis',
+                            'round': round_idx,
+                            'agent_id': agent.id,
+                            'agent_name': agent.name,
+                            'content': result,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        progress = 20 + round_idx * 10
+                        _update_debate_job(db, job_id, steps=steps, progress=progress)
+
+            # 多轮辩论
+            debate_history = []
+            for round_idx in range(1, debate_rounds + 1):
+                if _is_job_canceled(db, job_id):
+                    _update_debate_job(db, job_id, status='canceled')
+                    return
+                prompts = []
+                other_latest = "\n\n".join([
+                    f"{a.name}:\n{analysis_memory[a.id][-1]}"
+                    for a in agents if analysis_memory[a.id]
+                ])
+                recent_debate = "\n\n".join([
+                    f"Round {item['round']} - {item['agent_name']}:\n{item['content']}"
+                    for item in debate_history[-min(len(debate_history), len(agents) * 2):]
+                ]) if debate_history else "None"
+
+                for agent in agents:
+                    prompts.append((
+                        agent,
+                        f"{agent.prompt}\n\n"
+                        "You are participating in a multi-agent debate for a multi-stock selection task.\n"
+                        f"{multi_instruction}\n\n"
+                        f"Debate Round {round_idx}:\n"
+                        "Respond with counterarguments and emphasize your preferred stock.\n\n"
+                        f"Other agents' latest analyses:\n{other_latest}\n\n"
+                        f"Recent Debate History:\n{recent_debate}\n\n"
+                        "Please provide your debate response in Chinese."
+                    ))
+
+                with ThreadPoolExecutor(max_workers=min(6, len(prompts))) as executor:
+                    futures = {
+                        executor.submit(
+                            AIService.call_agent,
+                            *resolve_agent_config(agent),
+                            prompt
+                        ): agent
+                        for agent, prompt in prompts
+                    }
+                    for future in as_completed(futures):
+                        agent = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as e:
+                            result = f"[ERROR] {agent.name} debate failed: {str(e)}"
+                        item = {
+                            'phase': 'debate',
+                            'round': round_idx,
+                            'agent_id': agent.id,
+                            'agent_name': agent.name,
+                            'content': result,
+                            'timestamp': datetime.now().isoformat()
+                        }
+                        debate_history.append(item)
+                        steps.append(item)
+                        progress = 60 + round_idx * 10
+                        _update_debate_job(db, job_id, steps=steps, progress=progress)
+
+            # 决策员最终结论
+            transcript = "\n\n".join([
+                f"[{item['phase']} R{item['round']}] {item['agent_name']}:\n{item['content']}"
+                for item in steps
+            ])
+
+            decision_prompt = (
+                "You are a decisive, ruthless senior trader and final decision maker.\n"
+                "You must choose exactly ONE stock to buy from the candidates.\n"
+                "Be bold, concise, and action-oriented. No hedging.\n\n"
+                f"Candidates:\n{combined_data}\n\n"
+                f"Debate Transcript:\n{transcript}\n\n"
+                "Output a Markdown report with sections: Final Choice, Rationale, Entry Plan, Risk Control.\n"
+                "Please output in Chinese."
+            )
+
+            try:
+                report_md = AIService.call_agent(operator_provider, operator_api_key, operator_model, decision_prompt)
+                steps.append({
+                    'phase': 'debate',
+                    'round': debate_rounds + 1,
+                    'agent_id': 0,
+                    'agent_name': "裁判（决策）",
+                    'content': report_md,
+                    'timestamp': datetime.now().isoformat()
+                })
+                _update_debate_job(db, job_id, status='completed', progress=100, report_md=report_md, steps=steps, error=None)
+            except Exception as e:
+                fallback_report = (
+                    "## 决策生成失败（已提供原始记录）\n\n"
+                    f"- Error: {str(e)}\n\n"
+                    "### 原始辩论记录（节选）\n\n"
+                    f"{transcript[:8000]}\n\n"
+                    "请稍后重试生成决策报告。"
+                )
+                _update_debate_job(db, job_id, status='completed', progress=100, report_md=fallback_report, steps=steps, error=None)
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[API] 多选一辩论失败: {error_msg}")
             _update_debate_job(db, job_id, status='failed', error=error_msg)
         finally:
             db.close()
@@ -1031,6 +1259,50 @@ def register_routes(app):
         except Exception as e:
             error_msg = str(e)
             print(f"[API] 启动辩论任务失败: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+
+    @app.route('/api/ai/debate/start_multi', methods=['POST'])
+    def start_multi_debate_job_api():
+        """启动多选一辩论任务（后台执行）"""
+        try:
+            data = request.json or {}
+            codes = data.get('codes', [])
+            agent_ids = data.get('agent_ids', [])
+            analysis_rounds = int(data.get('analysis_rounds', 2))
+            debate_rounds = int(data.get('debate_rounds', 1))
+
+            if not isinstance(codes, list) or len(codes) < 2:
+                return jsonify({'success': False, 'error': '至少需要选择2只股票'}), 400
+            if not isinstance(agent_ids, list) or len(agent_ids) < 2:
+                return jsonify({'success': False, 'error': '至少需要选择2个Agent参与辩论'}), 400
+            codes = [str(c).strip() for c in codes if str(c).strip()]
+            if not all(code.isdigit() and len(code) == 6 for code in codes):
+                return jsonify({'success': False, 'error': '股票代码格式错误'}), 400
+
+            job_id = str(uuid.uuid4())
+            job_name = f"多选一: {'/'.join(codes)} {datetime.now().strftime('%Y-%m-%d')}"
+            job_code = ",".join(codes)
+
+            db = next(get_db())
+            try:
+                create_debate_job(
+                    db, job_id, job_code, job_name, agent_ids, analysis_rounds, debate_rounds,
+                    meta={'mode': 'multi_select', 'codes': codes}
+                )
+            finally:
+                db.close()
+
+            thread = threading.Thread(
+                target=_run_multi_select_job,
+                args=(job_id, codes, agent_ids, analysis_rounds, debate_rounds),
+                daemon=True
+            )
+            thread.start()
+
+            return jsonify({'success': True, 'data': {'job_id': job_id, 'name': job_name}})
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[API] 启动多选一辩论任务失败: {error_msg}")
             return jsonify({'success': False, 'error': error_msg}), 500
 
     @app.route('/api/ai/debate/status/<job_id>', methods=['GET'])
@@ -1351,3 +1623,284 @@ def register_routes(app):
             return buy_price, sell_price
         except:
             return None, None
+    
+    # ==================== 策略API ====================
+    
+    @app.route('/api/strategy/strong_stocks')
+    def get_strong_stocks():
+        """获取强势股（前两个交易日指定时间前涨停，当前未涨停）"""
+        try:
+            # 获取参数：涨停截止时间，默认11:30
+            limit_time = request.args.get('limit_time', '11:30')  # 涨停截止时间（T-1和T-2共用）
+            
+            print(f"[API] 开始筛选强势股... 截止时间={limit_time}")
+            
+            # 获取最近的交易日
+            def get_recent_trade_dates():
+                """获取最近的交易日（使用akshare）"""
+                try:
+                    import akshare as ak
+                    # 使用akshare获取交易日历
+                    trade_cal = ak.tool_trade_date_hist_sina()
+                    today = datetime.now().date()
+                    
+                    # 找到最近的交易日
+                    trade_dates = pd.to_datetime(trade_cal['trade_date']).dt.date.tolist()
+                    trade_dates = [d for d in trade_dates if d <= today]
+                    trade_dates.sort(reverse=True)
+                    
+                    if len(trade_dates) >= 3:
+                        return [trade_dates[0], trade_dates[1], trade_dates[2]]
+                    else:
+                        print(f"[API] 交易日数据不足，只有 {len(trade_dates)} 个")
+                        # 返回简单估计的日期
+                        today = date.today()
+                        return [today, today - timedelta(days=1), today - timedelta(days=2)]
+                except Exception as e:
+                    print(f"[API] 获取交易日失败: {e}")
+                    import traceback
+                    print(f"[API] 错误堆栈: {traceback.format_exc()}")
+                    # 返回简单估计的日期
+                    today = date.today()
+                    return [today, today - timedelta(days=1), today - timedelta(days=2)]
+            
+            trade_dates = get_recent_trade_dates()
+            if len(trade_dates) < 3:
+                return jsonify({'error': '无法获取足够的交易日数据'}), 500
+            
+            t_date = trade_dates[0]
+            t1_date = trade_dates[1]
+            t2_date = trade_dates[2]
+            
+            print(f"[API] 交易日: T={t_date}, T-1={t1_date}, T-2={t2_date}")
+            
+            # 获取T-1和T-2的涨停数据
+            def get_limit_up_stocks(date_obj):
+                """获取指定日期的涨停股票（使用akshare）"""
+                try:
+                    import akshare as ak
+                    date_str = date_obj.strftime('%Y%m%d')
+                    
+                    print(f"[API] 调用akshare获取涨停数据，日期: {date_str}")
+                    limit_up_df = ak.stock_zt_pool_em(date=date_str)
+                    
+                    if limit_up_df is None or len(limit_up_df) == 0:
+                        print(f"[API] 日期 {date_str} 无涨停数据")
+                        return []
+                    
+                    print(f"[API] 日期 {date_str} 获取到 {len(limit_up_df)} 条涨停数据")
+                    
+                    stocks = []
+                    for idx, row in limit_up_df.iterrows():
+                        # 提取股票代码
+                        code = None
+                        for code_field in ['代码', '股票代码', 'code']:
+                            if code_field in row and pd.notna(row[code_field]):
+                                code_str = str(row[code_field]).strip()
+                                if code_str.isdigit() and len(code_str) == 6:
+                                    code = code_str
+                                    break
+                                elif code_str.isdigit():
+                                    code = code_str.zfill(6)
+                                    break
+                        
+                        if not code:
+                            continue
+                        
+                        # 提取股票名称
+                        name = None
+                        for name_field in ['名称', '股票名称', 'name']:
+                            if name_field in row and pd.notna(row[name_field]):
+                                name = str(row[name_field]).strip()
+                                break
+                        
+                        # 提取涨停时间
+                        first_limit_time = None
+                        for field in ['首次封板时间', '最后封板时间', '封板时间', '涨停时间', '首次涨停时间']:
+                            if field in row and pd.notna(row[field]) and str(row[field]).strip():
+                                first_limit_time = str(row[field]).strip()
+                                if ' ' in first_limit_time:
+                                    first_limit_time = first_limit_time.split(' ')[1]
+                                break
+                        
+                        # 提取连板数和炸板次数
+                        consecutive_days = 0
+                        for field in ['连板数', '连板']:
+                            if field in row and pd.notna(row[field]):
+                                try:
+                                    consecutive_days = int(row[field])
+                                except:
+                                    pass
+                                break
+                        
+                        break_count = 0
+                        for field in ['炸板次数', '炸板']:
+                            if field in row and pd.notna(row[field]):
+                                try:
+                                    break_count = int(row[field])
+                                except:
+                                    pass
+                                break
+                        
+                        # 提取行业
+                        industry = ''
+                        for field in ['所属行业', '行业']:
+                            if field in row and pd.notna(row[field]):
+                                industry = str(row[field]).strip()
+                                break
+                        
+                        stocks.append({
+                            'code': code,
+                            'name': name or '未知',
+                            'first_limit_time': first_limit_time,
+                            'consecutive_days': consecutive_days,
+                            'break_count': break_count,
+                            'industry': industry,
+                            'date': date_str
+                        })
+                    
+                    return stocks
+                except Exception as e:
+                    print(f"[API] 获取 {date_obj} 涨停数据失败: {e}")
+                    import traceback
+                    print(f"[API] 错误堆栈: {traceback.format_exc()}")
+                    return []
+            
+            print("[API] 获取T-1和T-2涨停数据...")
+            t1_stocks = get_limit_up_stocks(t1_date)
+            t2_stocks = get_limit_up_stocks(t2_date)
+            
+            print(f"[API] T-1涨停股票数: {len(t1_stocks)}, T-2涨停股票数: {len(t2_stocks)}")
+            
+            # 筛选指定时间之前涨停的股票
+            def filter_early_limit(stocks, cutoff_time):
+                """筛选指定时间之前涨停的股票"""
+                result = []
+                try:
+                    # 将截止时间转换为数字格式（如11:30 -> 113000）
+                    if ':' in cutoff_time:
+                        parts = cutoff_time.split(':')
+                        cutoff_value = int(parts[0]) * 10000 + int(parts[1]) * 100
+                    else:
+                        cutoff_value = int(cutoff_time)
+                except:
+                    cutoff_value = 113000  # 默认11:30
+                
+                print(f"[API] 筛选截止时间值: {cutoff_value}")
+                
+                for stock in stocks:
+                    time_str = stock.get('first_limit_time', '')
+                    try:
+                        # 处理不同格式的时间
+                        if ':' in str(time_str):
+                            # 格式如 "09:25:00" 或 "09:25"
+                            parts = str(time_str).split(':')
+                            time_value = int(parts[0]) * 10000 + int(parts[1]) * 100
+                            if len(parts) > 2:
+                                time_value += int(parts[2])
+                        else:
+                            # 格式如 "092500" 或 92500
+                            time_value = int(time_str)
+                        
+                        # 在截止时间之前或等于截止时间涨停
+                        if time_value <= cutoff_value:
+                            result.append(stock)
+                    except Exception as e:
+                        print(f"[API] 解析时间失败: {time_str}, 错误: {e}")
+                        continue
+                
+                print(f"[API] 筛选前{len(stocks)}只，筛选后{len(result)}只")
+                return result
+            
+            t1_early = filter_early_limit(t1_stocks, limit_time)
+            t2_early = filter_early_limit(t2_stocks, limit_time)
+            
+            print(f"[API] T-1早盘涨停: {len(t1_early)}, T-2早盘涨停: {len(t2_early)}")
+            
+            # 找出同时在T-1和T-2都早盘涨停的股票
+            t1_codes = {s['code'] for s in t1_early}
+            t2_codes = {s['code'] for s in t2_early}
+            common_codes = t1_codes & t2_codes
+            
+            print(f"[API] 同时在T-1和T-2早盘涨停的股票数: {len(common_codes)}")
+            
+            # 获取T日（今天）的涨停股票
+            t_limit_stocks = get_limit_up_stocks(t_date)
+            t_limit_codes = {s['code'] for s in t_limit_stocks}
+            
+            print(f"[API] T日涨停股票数: {len(t_limit_codes)}")
+
+            # 获取T日（今天）的跌停股票
+            t_down_codes = set()
+            try:
+                import akshare as ak
+                t_down_df = ak.stock_dt_pool_em(date=t_date.strftime('%Y%m%d'))
+                if t_down_df is not None and len(t_down_df) > 0 and '代码' in t_down_df.columns:
+                    t_down_codes = set(t_down_df['代码'].astype(str).str.zfill(6).tolist())
+                print(f"[API] T日跌停股票数: {len(t_down_codes)}")
+            except Exception as e:
+                print(f"[API] 获取T日跌停数据失败: {e}")
+            
+            # 筛选出今天还没有涨停且未跌停的股票
+            result_codes = common_codes - t_limit_codes - t_down_codes
+            
+            print(f"[API] 符合条件的强势股数量: {len(result_codes)}")
+            
+            # 组装结果
+            result_stocks = []
+            for code in result_codes:
+                # 从T-1数据中获取股票信息
+                t1_info = next((s for s in t1_early if s['code'] == code), None)
+                t2_info = next((s for s in t2_early if s['code'] == code), None)
+                
+                if t1_info:
+                    stock_data = {
+                        'code': code,
+                        'name': t1_info['name'],
+                        't1_limit_time': t1_info['first_limit_time'],
+                        't2_limit_time': t2_info['first_limit_time'] if t2_info else None,
+                        'consecutive_days': t1_info.get('consecutive_days', 0),
+                        'break_count': t1_info.get('break_count', 0),
+                        'industry': t1_info.get('industry', ''),
+                        'current_price': None,
+                        'change_percent': None,
+                        'volume': None,
+                        'amount': None,
+                    }
+                    
+                    # 获取当前实时行情
+                    try:
+                        realtime = get_realtime_data(code)
+                        if realtime:
+                            stock_data['current_price'] = realtime.get('current_price')
+                            stock_data['change_percent'] = realtime.get('change_percent')
+                            stock_data['volume'] = realtime.get('volume')
+                            stock_data['amount'] = realtime.get('amount')
+                    except Exception as e:
+                        print(f"[API] 获取 {code} 实时行情失败: {e}")
+                    
+                    result_stocks.append(stock_data)
+            
+            print(f"[API] 返回强势股数据，共 {len(result_stocks)} 只")
+            
+            return jsonify({
+                'strategy': 'strong_stocks',
+                'description': f'T-1和T-2日{limit_time}前涨停，T日未涨停',
+                'params': {
+                    'limit_time': limit_time,
+                },
+                'trade_dates': {
+                    'T': t_date.strftime('%Y-%m-%d'),
+                    'T-1': t1_date.strftime('%Y-%m-%d'),
+                    'T-2': t2_date.strftime('%Y-%m-%d'),
+                },
+                'count': len(result_stocks),
+                'stocks': result_stocks
+            })
+        
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[API] 筛选强势股失败: {error_msg}")
+            import traceback
+            print(f"[API] 错误堆栈: {traceback.format_exc()}")
+            return jsonify({'error': '筛选强势股失败', 'message': error_msg}), 500

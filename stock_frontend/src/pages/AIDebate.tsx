@@ -10,7 +10,7 @@ export default function AIDebate() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const codeFromQuery = searchParams.get('code') || '';
-  const jobIdFromQuery = searchParams.get('job_id') || '';
+  const jobIdFromQuery = searchParams.get('job_id') || searchParams.get('jobId') || '';
   const state = (location.state || {}) as {
     code?: string;
     agentIds?: number[];
@@ -103,8 +103,10 @@ export default function AIDebate() {
 
   const displayCode = code || data?.code || '';
   const displayName = data?.name || displayCode;
+  const isMultiSelect = (data?.meta?.mode === 'multi_select') || displayCode.includes(',');
+  const multiCodes = data?.meta?.codes || (displayCode.includes(',') ? displayCode.split(',') : []);
 
-  const effectiveCode = displayCode;
+  const effectiveCode = !isMultiSelect ? displayCode : '';
   const { data: realtimeData } = useQuery<StockRealtime>({
     queryKey: ['realtime', effectiveCode],
     queryFn: () => stockAPI.getRealtime(effectiveCode),
@@ -261,53 +263,73 @@ export default function AIDebate() {
       {/* 基础信息 */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">基础信息（接口数据）</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {isMultiSelect ? (
           <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">实时行情</div>
-            <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-              <div>名称：{realtimeData?.name || displayName}</div>
-              <div>现价：{formatNumber(realtimeData?.current_price)}</div>
-              <div>涨跌幅：{formatNumber(realtimeData?.change_percent)}%</div>
-              <div>昨收：{formatNumber(realtimeData?.yesterday_close)}</div>
-              <div>开盘：{formatNumber(realtimeData?.open)}</div>
-              <div>最高：{formatNumber(realtimeData?.high)}</div>
-              <div>最低：{formatNumber(realtimeData?.low)}</div>
-              <div>成交量：{realtimeData?.volume ? `${formatNumber(realtimeData.volume / 10000, 0)}万手` : '--'}</div>
-              <div>成交额：{realtimeData?.amount ? `${formatNumber(realtimeData.amount / 100000000, 2)}亿` : '--'}</div>
+            <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">多选一候选股票</div>
+            <div className="flex flex-wrap gap-2">
+              {multiCodes.length > 0 ? (
+                multiCodes.map((item) => (
+                  <span key={item} className="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                    {item}
+                  </span>
+                ))
+              ) : (
+                <span className="text-sm text-gray-500">暂无候选股票列表</span>
+              )}
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+              多选一模式不展示单只股票的实时与舆情面板，请查看最终报告中的综合结论。
             </div>
           </div>
-          <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">资金与基本面</div>
-            <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-              <div>主力净流入：{comprehensiveData?.money_flow?.main_net_inflow != null ? `${formatNumber(comprehensiveData.money_flow.main_net_inflow, 2)}万` : '--'}</div>
-              <div>超大单净流入：{comprehensiveData?.money_flow?.super_large_net_inflow != null ? `${formatNumber(comprehensiveData.money_flow.super_large_net_inflow, 2)}万` : '--'}</div>
-              <div>PE：{formatNumber(comprehensiveData?.fundamental?.pe)}</div>
-              <div>PB：{formatNumber(comprehensiveData?.fundamental?.pb)}</div>
-              <div>PS：{formatNumber(comprehensiveData?.fundamental?.ps)}</div>
-              <div>ROE：{formatNumber(comprehensiveData?.fundamental?.roe)}%</div>
-              <div>EPS：{formatNumber(comprehensiveData?.fundamental?.eps)}</div>
-              <div>BPS：{formatNumber(comprehensiveData?.fundamental?.bps)}</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">实时行情</div>
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                <div>名称：{realtimeData?.name || displayName}</div>
+                <div>现价：{formatNumber(realtimeData?.current_price)}</div>
+                <div>涨跌幅：{formatNumber(realtimeData?.change_percent)}%</div>
+                <div>昨收：{formatNumber(realtimeData?.yesterday_close)}</div>
+                <div>开盘：{formatNumber(realtimeData?.open)}</div>
+                <div>最高：{formatNumber(realtimeData?.high)}</div>
+                <div>最低：{formatNumber(realtimeData?.low)}</div>
+                <div>成交量：{realtimeData?.volume ? `${formatNumber(realtimeData.volume / 10000, 0)}万手` : '--'}</div>
+                <div>成交额：{realtimeData?.amount ? `${formatNumber(realtimeData.amount / 100000000, 2)}亿` : '--'}</div>
+              </div>
+            </div>
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">资金与基本面</div>
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                <div>主力净流入：{comprehensiveData?.money_flow?.main_net_inflow != null ? `${formatNumber(comprehensiveData.money_flow.main_net_inflow, 2)}万` : '--'}</div>
+                <div>超大单净流入：{comprehensiveData?.money_flow?.super_large_net_inflow != null ? `${formatNumber(comprehensiveData.money_flow.super_large_net_inflow, 2)}万` : '--'}</div>
+                <div>PE：{formatNumber(comprehensiveData?.fundamental?.pe)}</div>
+                <div>PB：{formatNumber(comprehensiveData?.fundamental?.pb)}</div>
+                <div>PS：{formatNumber(comprehensiveData?.fundamental?.ps)}</div>
+                <div>ROE：{formatNumber(comprehensiveData?.fundamental?.roe)}%</div>
+                <div>EPS：{formatNumber(comprehensiveData?.fundamental?.eps)}</div>
+                <div>BPS：{formatNumber(comprehensiveData?.fundamental?.bps)}</div>
+              </div>
+            </div>
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">行业对比</div>
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                <div>行业：{comprehensiveData?.industry_comparison?.industry_name || '--'}</div>
+                <div>行业排名：{comprehensiveData?.industry_comparison?.rank != null ? `${comprehensiveData.industry_comparison.rank}` : '--'}</div>
+                <div>行业平均涨跌：{formatNumber(comprehensiveData?.industry_comparison?.avg_change_percent)}%</div>
+                <div>行业总数：{comprehensiveData?.industry_comparison?.total != null ? `${comprehensiveData.industry_comparison.total}` : '--'}</div>
+              </div>
+            </div>
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">舆情摘要（近7天）</div>
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                <div>新闻数量：{sentimentData?.news?.count ?? '--'}</div>
+                <div>帖子数量：{sentimentData?.posts?.total_count ?? '--'}</div>
+                <div>最新帖子：{sentimentData?.posts?.latest_count ?? '--'}</div>
+                <div>热门帖子：{sentimentData?.posts?.hot_count ?? '--'}</div>
+              </div>
             </div>
           </div>
-          <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">行业对比</div>
-            <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-              <div>行业：{comprehensiveData?.industry_comparison?.industry_name || '--'}</div>
-              <div>行业排名：{comprehensiveData?.industry_comparison?.rank != null ? `${comprehensiveData.industry_comparison.rank}` : '--'}</div>
-              <div>行业平均涨跌：{formatNumber(comprehensiveData?.industry_comparison?.avg_change_percent)}%</div>
-              <div>行业总数：{comprehensiveData?.industry_comparison?.total != null ? `${comprehensiveData.industry_comparison.total}` : '--'}</div>
-            </div>
-          </div>
-          <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">舆情摘要（近7天）</div>
-            <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-              <div>新闻数量：{sentimentData?.news?.count ?? '--'}</div>
-              <div>帖子数量：{sentimentData?.posts?.total_count ?? '--'}</div>
-              <div>最新帖子：{sentimentData?.posts?.latest_count ?? '--'}</div>
-              <div>热门帖子：{sentimentData?.posts?.hot_count ?? '--'}</div>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* 最终报告 */}

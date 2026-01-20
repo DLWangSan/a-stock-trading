@@ -79,6 +79,11 @@ export interface DebateJobStatus {
   agent_ids: number[];
   analysis_rounds: number;
   debate_rounds: number;
+  meta?: {
+    mode?: string;
+    codes?: string[];
+    decision_agent_id?: number;
+  };
   status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
   progress: number;
   steps: DebateStep[];
@@ -93,6 +98,10 @@ class StockAPI {
 
   constructor(baseURL: string = API_BASE_URL) {
     this.baseURL = baseURL;
+  }
+
+  getBaseURL() {
+    return this.baseURL;
   }
 
   setBaseURL(url: string) {
@@ -265,6 +274,28 @@ class StockAPI {
     params.append('limit', String(limit));
     const data = await this.request<{ success: boolean; data: DebateJobStatus[] }>(`/api/ai/debate/jobs?${params.toString()}`);
     return data.data;
+  }
+
+  async startMultiSelectDebate(
+    codes: string[],
+    agentIds: number[],
+    analysisRounds: number = 2,
+    debateRounds: number = 1
+  ): Promise<{ job_id: string; name: string }> {
+    const data = await this.request<{ success: boolean; data: { job_id: string; name: string } }>('/api/ai/debate/start_multi', {
+      method: 'POST',
+      body: JSON.stringify({
+        codes,
+        agent_ids: agentIds,
+        analysis_rounds: analysisRounds,
+        debate_rounds: debateRounds,
+      }),
+    });
+    return data.data;
+  }
+
+  async getStrongStocks(limitTime: string): Promise<any> {
+    return this.request(`/api/strategy/strong_stocks?limit_time=${encodeURIComponent(limitTime)}`);
   }
 
   async stopDebateJob(jobId: string): Promise<boolean> {

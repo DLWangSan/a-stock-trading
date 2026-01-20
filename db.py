@@ -155,19 +155,21 @@ def save_analysis_cache(db: Session, code: str, analysis_type: str, data: dict):
 # ==================== 辩论任务操作 ====================
 
 def create_debate_job(db: Session, job_id: str, code: str, name: str, agent_ids: list,
-                      analysis_rounds: int, debate_rounds: int):
+                     analysis_rounds: int, debate_rounds: int, meta: dict = None):
     """创建辩论任务"""
+    payload = {
+        'agent_ids': agent_ids,
+        'analysis_rounds': analysis_rounds,
+        'debate_rounds': debate_rounds,
+        'meta': meta or {}
+    }
     job = DebateJob(
         job_id=job_id,
         code=code,
         name=name,
         status='queued',
         progress=0,
-        agent_ids=json.dumps({
-            'agent_ids': agent_ids,
-            'analysis_rounds': analysis_rounds,
-            'debate_rounds': debate_rounds
-        }, ensure_ascii=False),
+        agent_ids=json.dumps(payload, ensure_ascii=False),
         steps=json.dumps([], ensure_ascii=False),
         report_md='',
         error=None,

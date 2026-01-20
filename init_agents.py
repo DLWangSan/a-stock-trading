@@ -17,6 +17,9 @@ DEFAULT_AGENTS = [
 3. Trend identification: Determine the current trend direction and strength
 4. Support and resistance levels: Identify key price levels
 5. Trading recommendations: Provide actionable trading suggestions based on technical analysis
+6. Data sanity check: If any indicator is clearly abnormal, missing, or inconsistent, ignore that indicator instead of forcing an interpretation
+
+Debate guidance: In debate rounds, stay objective and argue strictly from the technical analysis perspective. Address opposing points with evidence, without simply agreeing.
 
 Please output your analysis in Chinese. The stock data will be provided below.
 
@@ -34,6 +37,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 4. Capital strength assessment: Evaluate the strength of capital flow
 5. Trading recommendations: Provide actionable trading suggestions based on capital flow analysis
 
+Debate guidance: In debate rounds, stay objective and argue strictly from the capital flow perspective. Address opposing points with evidence, without simply agreeing.
+
 Please output your analysis in Chinese. The stock data will be provided below.
 
 Note: All instructions and prompts are in English to ensure better AI understanding, but the final analysis output should be in Chinese.''',
@@ -49,6 +54,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 3. Financial health: Assess the overall financial condition of the company
 4. Investment value evaluation: Determine the investment value based on fundamentals
 5. Trading recommendations: Provide actionable trading suggestions based on fundamental analysis
+
+Debate guidance: In debate rounds, stay objective and argue strictly from the fundamental perspective. Address opposing points with evidence, without simply agreeing.
 
 Please output your analysis in Chinese. The stock data will be provided below.
 
@@ -66,6 +73,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 4. Industry position assessment: Evaluate the stock's competitive position
 5. Trading recommendations: Provide actionable trading suggestions based on industry analysis
 
+Debate guidance: In debate rounds, stay objective and argue strictly from the industry comparison perspective. Address opposing points with evidence, without simply agreeing.
+
 Please output your analysis in Chinese. The stock data will be provided below.
 
 Note: All instructions and prompts are in English to ensure better AI understanding, but the final analysis output should be in Chinese.''',
@@ -81,6 +90,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 3. Market attention: Assess the level of market attention and discussion
 4. Sentiment strength: Evaluate the strength of market sentiment
 5. Trading recommendations: Provide actionable trading suggestions based on sentiment analysis
+
+Debate guidance: In debate rounds, stay objective and argue strictly from the sentiment perspective. Address opposing points with evidence, without simply agreeing.
 
 Please output your analysis in Chinese. The stock data will be provided below.
 
@@ -98,6 +109,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 4. Sell price recommendation: Recommend specific sell price ranges
 5. Risk warnings: Highlight potential risks and considerations
 
+Debate guidance: In debate rounds, stay objective and argue strictly from the intraday trading perspective. Address opposing points with evidence, without simply agreeing.
+
 Please output your analysis in Chinese and clearly specify the buy price and sell price in the format: Buy price: XX.XX yuan, Sell price: XX.XX yuan. The stock data will be provided below.''',
         'sort_order': 6
     },
@@ -111,6 +124,8 @@ Please output your analysis in Chinese and clearly specify the buy price and sel
 3. Key events and turning points: Identify important events and price turning points
 4. Lessons learned: Extract key insights and lessons from the analysis
 5. Future focus points: Highlight important factors to watch going forward
+
+Debate guidance: In debate rounds, stay objective and argue strictly from the review perspective. Address opposing points with evidence, without simply agreeing.
 
 Please output your analysis in Chinese. The stock data will be provided below.
 
@@ -129,6 +144,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 4. Industry/market tailwinds: highlight favorable sector or market conditions
 5. Actionable bullish recommendation: provide a clear optimistic trading outlook
 
+Debate guidance: In debate rounds, stay objective but maintain a bullish stance. Address opposing points with evidence, without simply agreeing.
+
 Please output your analysis in Chinese. The stock data will be provided below.
 
 Note: All instructions and prompts are in English to ensure better AI understanding, but the final analysis output should be in Chinese.''',
@@ -144,6 +161,8 @@ Note: All instructions and prompts are in English to ensure better AI understand
 3. Bearish fundamentals: identify weaknesses, overvaluation, financial risks
 4. Industry/market headwinds: highlight unfavorable sector or market conditions
 5. Actionable bearish recommendation: provide a clear cautious trading outlook
+
+Debate guidance: In debate rounds, stay objective but maintain a bearish stance. Address opposing points with evidence, without simply agreeing.
 
 Please output your analysis in Chinese. The stock data will be provided below.
 
