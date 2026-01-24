@@ -287,4 +287,3 @@ def get_comprehensive_data_with_indicators(code):
     result['industry_comparison'] = get_industry_comparison(code, sector_info=result.get('sector_info'))
     
     return result
-

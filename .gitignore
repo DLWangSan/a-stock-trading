@@ -71,6 +71,7 @@ logs/
 
 # Test files
 test/
+!test/project_intro.md
 test_*.py
 *_test.py
 tests/
