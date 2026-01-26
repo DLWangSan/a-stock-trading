@@ -850,7 +850,8 @@ def register_routes(app):
                 'deepseek': 'deepseek-chat',
                 'qwen': 'qwen-turbo',
                 'gemini': 'gemini-pro',
-                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct'
+                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct',
+                'grok': 'grok-4-0709'
             }
 
             def resolve_agent_config(agent):
@@ -1026,7 +1027,8 @@ def register_routes(app):
                 'deepseek': 'deepseek-chat',
                 'qwen': 'qwen-turbo',
                 'gemini': 'gemini-pro',
-                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct'
+                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct',
+                'grok': 'grok-4-0709'
             }
 
             # 固定裁判，不使用数据库Agent
@@ -1408,7 +1410,8 @@ def register_routes(app):
                 'deepseek': 'deepseek-chat',
                 'qwen': 'qwen-turbo',
                 'gemini': 'gemini-pro',
-                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct'
+                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct',
+                'grok': 'grok-4-0709'
             }
 
             def resolve_agent_config(agent):

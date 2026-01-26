@@ -37,7 +37,7 @@ class Agent(Base):
     type = Column(String(20), nullable=False)  # 'default', 'intraday_t', 'review'
     prompt = Column(Text)
     enabled = Column(Boolean, default=True)
-    ai_provider = Column(String(20))  # 'openai', 'deepseek', 'qwen', 'gemini'
+    ai_provider = Column(String(20))  # 'openai', 'deepseek', 'qwen', 'gemini', 'grok'
     model = Column(String(50))
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)

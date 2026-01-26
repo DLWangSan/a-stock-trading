@@ -10,12 +10,14 @@ interface ConfigState {
   deepseekApiKey: string;
   qwenApiKey: string;
   geminiApiKey: string;
+  grokApiKey: string;
   defaultAiProvider: string;
   setApiBaseURL: (url: string) => void;
   setOpenaiApiKey: (key: string) => void;
   setDeepseekApiKey: (key: string) => void;
   setQwenApiKey: (key: string) => void;
   setGeminiApiKey: (key: string) => void;
+  setGrokApiKey: (key: string) => void;
   setDefaultAiProvider: (provider: string) => void;
 }
 
@@ -27,12 +29,14 @@ export const useConfigStore = create<ConfigState>()(
       deepseekApiKey: '',
       qwenApiKey: '',
       geminiApiKey: '',
+      grokApiKey: '',
       defaultAiProvider: 'openai',
       setApiBaseURL: (url) => set({ apiBaseURL: url }),
       setOpenaiApiKey: (key) => set({ openaiApiKey: key }),
       setDeepseekApiKey: (key) => set({ deepseekApiKey: key }),
       setQwenApiKey: (key) => set({ qwenApiKey: key }),
       setGeminiApiKey: (key) => set({ geminiApiKey: key }),
+      setGrokApiKey: (key) => set({ grokApiKey: key }),
       setDefaultAiProvider: (provider) => set({ defaultAiProvider: provider }),
     }),
     {

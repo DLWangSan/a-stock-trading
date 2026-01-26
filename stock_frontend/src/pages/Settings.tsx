@@ -9,6 +9,7 @@ const AI_PROVIDERS = [
   { value: 'qwen', label: '通义千问' },
   { value: 'gemini', label: 'Google Gemini' },
   { value: 'siliconflow', label: '硅基流动' },
+  { value: 'grok', label: 'xAI Grok' },
 ];
 
 export default function Settings() {
@@ -307,9 +308,7 @@ function AgentConfigSection() {
   const handleEdit = (agent: Agent) => {
     setEditingAgent(agent);
     setPrompt(agent.prompt);
-  };
-
-  const handleSavePrompt = async () => {
+  };  const handleSavePrompt = async () => {
     if (!editingAgent) return;
 
     try {

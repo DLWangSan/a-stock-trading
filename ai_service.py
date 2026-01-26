@@ -99,6 +99,24 @@ class AIService:
         result = response.json()
         return result["choices"][0]["message"]["content"]
     
+    @staticmethod
+    def call_grok(api_key: str, model: str, prompt: str) -> str:
+        """调用Grok API (x.ai)"""
+        url = "https://api.x.ai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7
+        }
+        response = requests.post(url, headers=headers, json=data, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+    
     @classmethod
     def call_agent(cls, provider: str, api_key: str, model: str, prompt: str) -> str:
         """统一调用接口"""
@@ -107,7 +125,8 @@ class AIService:
             "deepseek": cls.call_deepseek,
             "qwen": cls.call_qwen,
             "gemini": cls.call_gemini,
-            "siliconflow": cls.call_siliconflow
+            "siliconflow": cls.call_siliconflow,
+            "grok": cls.call_grok
         }
         
         if provider not in provider_map:
@@ -210,6 +229,18 @@ class AIService:
                 "deepseek-ai/DeepSeek-V2.5",
                 "deepseek-ai/DeepSeek-V2",
             ]
+        elif provider == "grok":
+            # Grok (x.ai) 兼容 OpenAI 模型列表接口
+            url = "https://api.x.ai/v1/models"
+            headers = {"Authorization": f"Bearer {api_key}"}
+            try:
+                response = requests.get(url, headers=headers, timeout=30)
+                response.raise_for_status()
+                result = response.json()
+                models = [m["id"] for m in result.get("data", [])]
+                return sorted(models) if models else ["grok-4-0709", "grok-beta", "grok-2"]
+            except:
+                return ["grok-4-0709", "grok-beta", "grok-2"]
         else:
             return []
     
@@ -224,7 +255,8 @@ class AIService:
                     "deepseek": "deepseek-chat",
                     "qwen": "qwen-turbo",
                     "gemini": "gemini-pro",
-                    "siliconflow": "Qwen/Qwen2.5-7B-Instruct"
+                    "siliconflow": "Qwen/Qwen2.5-7B-Instruct",
+                    "grok": "grok-4-0709"
                 }
                 model = default_models.get(provider, "gpt-3.5-turbo")
             
