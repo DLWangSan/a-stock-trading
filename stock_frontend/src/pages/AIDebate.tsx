@@ -18,12 +18,6 @@ export default function AIDebate() {
     debateRounds?: number;
     modeLabel?: string;
   };
-  const code = state.code || codeFromQuery;
-  const agentIds = state.agentIds || [];
-  const analysisRounds = state.analysisRounds || parseInt(searchParams.get('ar') || '3', 10);
-  const debateRounds = state.debateRounds || parseInt(searchParams.get('dr') || '3', 10);
-  const modeLabel = state.modeLabel || '自定义模式';
-
   const [jobId, setJobId] = useState(jobIdFromQuery);
   const [starting, setStarting] = useState(false);
 
@@ -37,21 +31,29 @@ export default function AIDebate() {
     },
   });
 
+  // 优先使用任务数据中的轮数，如果没有则使用state或URL参数，最后使用默认值
+  const effectiveAnalysisRounds = data?.analysis_rounds || state.analysisRounds || parseInt(searchParams.get('ar') || '3', 10);
+  const effectiveDebateRounds = data?.debate_rounds || state.debateRounds || parseInt(searchParams.get('dr') || '3', 10);
+  
+  const code = state.code || codeFromQuery || data?.code || '';
+  const agentIds = state.agentIds || data?.agent_ids || [];
+  const modeLabel = state.modeLabel || '自定义模式';
+
   useEffect(() => {
     if (!jobId && code && agentIds.length >= 2 && !starting) {
       setStarting(true);
       stockAPI
-        .startDebateJob(code, agentIds, analysisRounds, debateRounds)
+        .startDebateJob(code, agentIds, effectiveAnalysisRounds, effectiveDebateRounds)
         .then((res) => {
           setJobId(res.job_id);
-          setSearchParams({ code, job_id: res.job_id, ar: String(analysisRounds), dr: String(debateRounds) });
+          setSearchParams({ code, job_id: res.job_id, ar: String(effectiveAnalysisRounds), dr: String(effectiveDebateRounds) });
         })
         .catch((err) => {
           console.error('启动辩论失败:', err);
         })
         .finally(() => setStarting(false));
     }
-  }, [jobId, code, agentIds, starting, setSearchParams]);
+  }, [jobId, code, agentIds, starting, setSearchParams, effectiveAnalysisRounds, effectiveDebateRounds]);
 
   const steps = useMemo(() => data?.steps || [], [data]);
   const reportMd = data?.report_md || '';
@@ -168,7 +170,7 @@ export default function AIDebate() {
             TradingAgents 辩论分析 - {displayName || '未知股票'}
           </h1>
           <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            {modeLabel} · 思考{analysisRounds} / 辩论{debateRounds}
+            {modeLabel} · 思考{effectiveAnalysisRounds} / 辩论{effectiveDebateRounds}
           </div>
         </div>
         <div className="flex gap-2">
