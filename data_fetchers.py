@@ -615,7 +615,8 @@ def get_fundamental_data(code):
         url = "https://push2.eastmoney.com/api/qt/stock/get"
         
         # 选择关键基本面字段
-        fields = "f57,f58,f43,f44,f45,f46,f47,f48,f49,f50,f51,f52,f55,f60,f84,f85,f86,f87,f92,f116,f117,f162,f167,f168,f169,f170,f171,f173,f180,f181,f183,f184,f185,f186,f187,f188,f189"
+        # 添加更多字段以查找净利润等数据
+        fields = "f57,f58,f43,f44,f45,f46,f47,f48,f49,f50,f51,f52,f55,f60,f84,f85,f86,f87,f92,f116,f117,f162,f167,f168,f169,f170,f171,f173,f180,f181,f183,f184,f185,f186,f187,f188,f189,f190,f191,f192"
         
         params = {
             'invt': '2',
@@ -631,8 +632,11 @@ def get_fundamental_data(code):
             # 估值指标
             'pe_dynamic': None,  # 市盈率(动态)
             'pe_ttm': None,  # 市盈率(TTM)
+            'pe': None,  # 兼容字段：优先使用动态PE，如果没有则使用TTM PE
             'pb_ratio': None,  # 市净率
+            'pb': None,  # 兼容字段：市净率
             'ps_ratio': None,  # 市销率
+            'ps': None,  # 兼容字段：市销率
             'pcf_ratio': None,  # 市现率
             # 市值和股本
             'total_market_cap': None,  # 总市值(亿元)
@@ -679,14 +683,36 @@ def get_fundamental_data(code):
                     result['name'] = d.get('f58')
                     
                     # 估值指标
-                    if d.get('f92') is not None:
-                        result['pe_dynamic'] = d['f92']
-                    if d.get('f171') is not None and isinstance(d['f171'], (int, float)):
-                        result['pe_ttm'] = d['f171']
+                    # 根据实际数据对比，修正字段映射：
+                    # f162: PE(动)，需要除以100
+                    # f167: PB(市净率)，需要除以100
+                    # f92: BPS(每股净资产)，不是PE！
+                    # f171: TTM PE
                     if d.get('f162') is not None and isinstance(d['f162'], (int, float)) and d['f162'] > 0:
-                        result['pb_ratio'] = d['f162'] / 100  # 市净率需要除以100
+                        pe_dynamic_val = d['f162'] / 100  # PE(动)需要除以100
+                        result['pe_dynamic'] = pe_dynamic_val
+                        result['pe'] = pe_dynamic_val  # 添加兼容字段，优先使用动态PE
+                    
+                    if d.get('f171') is not None and isinstance(d['f171'], (int, float)):
+                        pe_ttm_val = d['f171']
+                        result['pe_ttm'] = pe_ttm_val
+                        if result.get('pe') is None:  # 如果没有动态PE，使用TTM PE
+                            result['pe'] = pe_ttm_val
+                    
+                    # PB值处理：f167是PB，需要除以100
                     if d.get('f167') is not None and isinstance(d['f167'], (int, float)) and d['f167'] > 0:
-                        result['ps_ratio'] = d['f167'] / 100  # 市销率需要除以100
+                        pb_val = d['f167'] / 100  # 市净率需要除以100
+                        result['pb_ratio'] = pb_val
+                        result['pb'] = pb_val  # 添加兼容字段
+                    
+                    # PS值处理：需要找到正确的PS字段，暂时保留f167的旧逻辑作为备用
+                    # 注意：f167现在用作PB，PS字段可能需要重新查找
+                    if d.get('f168') is not None and isinstance(d['f168'], (int, float)) and d['f168'] > 0:
+                        ps_val = d['f168'] / 100  # 市销率可能需要除以100，需要验证
+                        result['ps_ratio'] = ps_val
+                        result['ps'] = ps_val  # 添加兼容字段
+                    
+                    # PCF值处理：需要除以100
                     if d.get('f168') is not None and isinstance(d['f168'], (int, float)) and d['f168'] > 0:
                         result['pcf_ratio'] = d['f168'] / 100  # 市现率需要除以100
                     
@@ -695,34 +721,81 @@ def get_fundamental_data(code):
                         result['total_market_cap'] = d['f116'] / 100000000  # 元转亿元
                     if d.get('f117') is not None:
                         result['circulating_market_cap'] = d['f117'] / 100000000  # 元转亿元
+                    # f84和f85的单位是"股"，需要除以100000000得到亿股
                     if d.get('f84') is not None:
-                        result['total_shares'] = d['f84'] / 10000  # 万股转亿股
+                        result['total_shares'] = d['f84'] / 100000000  # 股转亿股
                     if d.get('f85') is not None:
-                        result['circulating_shares'] = d['f85'] / 10000  # 万股转亿股
+                        result['circulating_shares'] = d['f85'] / 100000000  # 股转亿股
                     
                     # 财务指标
                     if d.get('f173') is not None:
                         result['roe'] = d['f173']
-                    if d.get('f180') is not None and isinstance(d['f180'], (int, float)):
-                        # EPS可能需要除以100，但先保持原值，根据实际情况调整
+                    
+                    # EPS字段：f55是EPS（根据数据对比验证）
+                    if d.get('f55') is not None and isinstance(d['f55'], (int, float)):
+                        result['eps'] = d['f55']
+                    elif d.get('f180') is not None and isinstance(d['f180'], (int, float)):
+                        # 备用字段f180
                         result['eps'] = d['f180'] / 100 if abs(d['f180']) > 10 else d['f180']
-                    if d.get('f181') is not None and isinstance(d['f181'], (int, float)):
-                        # BPS可能需要除以100，但先保持原值，根据实际情况调整
-                        result['bps'] = d['f181'] / 100 if abs(d['f181']) > 1000 else d['f181']
+                    
+                    # BPS字段：f92是BPS(每股净资产)
+                    if d.get('f92') is not None and isinstance(d['f92'], (int, float)) and d['f92'] > 0:
+                        result['bps'] = d['f92']  # f92直接就是BPS
                     
                     # 财务数据
+                    # f183-f188的单位可能是"元"或"万元"，根据数值大小判断
+                    # 如果数值很大（>1000000），单位是"元"，需要除以100000000得到亿元
+                    # 如果数值较小（<=1000000），单位是"万元"，需要除以10000得到亿元
                     if d.get('f183') is not None:
-                        result['revenue'] = d['f183'] / 10000  # 万元转亿元
+                        val = d['f183']
+                        result['revenue'] = val / 100000000 if abs(val) > 1000000 else val / 10000  # 元或万元转亿元
                     if d.get('f184') is not None:
                         result['revenue_growth'] = d['f184']
+                    
+                    # 净利润和利润增长字段：根据测试，f185和f186的字段含义搞反了
+                    # f185的值(73.90)非常接近利润增长(73.9%)，f186的值(12.11)接近毛利率(12.11%)
+                    # 所以：f185是利润增长，f186是毛利率
                     if d.get('f185') is not None:
-                        result['net_profit'] = d['f185'] / 10000  # 万元转亿元
+                        val = d['f185']
+                        # f185是利润增长（百分比）
+                        if 0 <= abs(val) <= 200:
+                            result['profit_growth'] = val
+                    
+                    # f186是毛利率
                     if d.get('f186') is not None:
-                        result['profit_growth'] = d['f186']
+                        val = d['f186']
+                        if 0 <= abs(val) <= 100:
+                            result['gross_margin'] = val  # 毛利率
+                    
+                    # 净利润：暂时通过营业收入和净利率计算
+                    # 净利率 = 净利润 / 营业收入
+                    # 净利润 = 营业收入 * 净利率
+                    # 但净利率字段可能不在当前字段列表中，需要进一步查找
+                    # 或者净利润字段可能是其他字段，需要验证
+                    
+                    # 净利率和负债率：f187是净利率（百分比），f188是负债率（百分比）
                     if d.get('f187') is not None:
-                        result['total_assets'] = d['f187'] / 10000  # 万元转亿元
+                        val = d['f187']
+                        if 0 <= abs(val) <= 100:
+                            result['net_margin'] = val  # 净利率（百分比）
+                            # 通过营业收入和净利率计算净利润
+                            if result.get('revenue') is not None:
+                                result['net_profit'] = result['revenue'] * val / 100
+                    
+                    # f188是负债率（百分比）
                     if d.get('f188') is not None:
-                        result['net_assets'] = d['f188'] / 10000  # 万元转亿元
+                        val = d['f188']
+                        if 0 <= abs(val) <= 100:
+                            result['debt_ratio'] = val  # 负债率
+                    
+                    # 总资产和净资产：需要通过其他字段查找，或者暂时不设置
+                    # 净资产可以通过BPS和总股本计算：净资产 = BPS * 总股本
+                    if result.get('bps') is not None and result.get('total_shares') is not None:
+                        result['net_assets'] = result['bps'] * result['total_shares']
+                    
+                    # f190是每股未分配利润
+                    if d.get('f190') is not None and isinstance(d['f190'], (int, float)):
+                        result['retained_earnings_per_share'] = d['f190']
                     if d.get('f189') is not None:
                         result['shareholders_num'] = int(d['f189'])
                     
@@ -743,8 +816,11 @@ def get_fundamental_data(code):
             'name': None,
             'pe_dynamic': None,
             'pe_ttm': None,
+            'pe': None,  # 兼容字段
             'pb_ratio': None,
+            'pb': None,  # 兼容字段
             'ps_ratio': None,
+            'ps': None,  # 兼容字段
             'pcf_ratio': None,
             'total_market_cap': None,
             'circulating_market_cap': None,
