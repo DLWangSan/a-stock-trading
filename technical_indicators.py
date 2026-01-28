@@ -177,6 +177,20 @@ def get_comprehensive_data(code):
     print(f"[API] 获取 {code} 行业对比数据...")
     result['industry_comparison'] = get_industry_comparison(code, sector_info=result.get('sector_info'))
     
+    # 计算换手率：换手率 = (成交量 / 流通股本) * 100%
+    # 成交量单位：股（新浪API的fields[8]返回的是股数，不是手数）
+    # 流通股本单位：亿股
+    if result['realtime'] and result['fundamental']:
+        volume = result['realtime'].get('volume')  # 成交量（股）
+        circulating_shares = result['fundamental'].get('circulating_shares')  # 流通股本（亿股）
+        
+        if volume and circulating_shares and circulating_shares > 0:
+            # 换手率 = 成交量（股） / (流通股本亿股 * 100000000股/亿股) * 100%
+            # = volume / (circulating_shares * 100000000) * 100
+            turnover_rate = volume / (circulating_shares * 100000000) * 100
+            result['realtime']['turnover_rate'] = turnover_rate
+            print(f"[API] 计算换手率: {turnover_rate:.2f}% (成交量={volume}股, 流通股本={circulating_shares}亿股)")
+    
     return result
 
 
@@ -285,5 +299,19 @@ def get_comprehensive_data_with_indicators(code):
     
     print(f"[API] 获取 {code} 行业对比数据...")
     result['industry_comparison'] = get_industry_comparison(code, sector_info=result.get('sector_info'))
+    
+    # 计算换手率：换手率 = (成交量 / 流通股本) * 100%
+    # 成交量单位：股（新浪API的fields[8]返回的是股数，不是手数）
+    # 流通股本单位：亿股
+    if result['realtime'] and result['fundamental']:
+        volume = result['realtime'].get('volume')  # 成交量（股）
+        circulating_shares = result['fundamental'].get('circulating_shares')  # 流通股本（亿股）
+        
+        if volume and circulating_shares and circulating_shares > 0:
+            # 换手率 = 成交量（股） / (流通股本亿股 * 100000000股/亿股) * 100%
+            # = volume / (circulating_shares * 100000000) * 100
+            turnover_rate = volume / (circulating_shares * 100000000) * 100
+            result['realtime']['turnover_rate'] = turnover_rate
+            print(f"[API] 计算换手率: {turnover_rate:.2f}% (成交量={volume}股, 流通股本={circulating_shares}亿股)")
     
     return result

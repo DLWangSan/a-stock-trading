@@ -94,62 +94,77 @@ export default function StockDetail() {
       </div>
 
       {/* 实时行情卡片 */}
-      {realtimeLoading ? (
+      {realtimeLoading && comprehensiveLoading ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <LoadingSpinner text="加载实时行情..." />
         </div>
-      ) : realtimeData ? (
+      ) : (realtimeData || comprehensiveData?.realtime) ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">实时行情</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">当前价</div>
-              <div className={`text-2xl font-bold ${
-                realtimeData.change_percent >= 0
-                  ? 'text-red-600 dark:text-red-400'
-                  : 'text-green-600 dark:text-green-400'
-              }`}>
-                {realtimeData.current_price?.toFixed(2)}
+          {/* 优先使用comprehensiveData中的实时数据（包含换手率），如果没有则使用realtimeData */}
+          {(() => {
+            // 优先使用comprehensiveData.realtime（包含换手率），否则使用realtimeData
+            const displayData = comprehensiveData?.realtime || realtimeData;
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">当前价</div>
+                  <div className={`text-2xl font-bold ${
+                    (displayData?.change_percent ?? 0) >= 0
+                      ? 'text-red-600 dark:text-red-400'
+                      : 'text-green-600 dark:text-green-400'
+                  }`}>
+                    {displayData?.current_price?.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">涨跌幅</div>
+                  <div
+                    className={`text-2xl font-bold ${
+                      (displayData?.change_percent ?? 0) >= 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-green-600 dark:text-green-400'
+                    }`}
+                  >
+                    {(displayData?.change_percent ?? 0) >= 0 ? '+' : ''}
+                    {displayData?.change_percent?.toFixed(2)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">最高</div>
+                  <div className="text-xl font-semibold text-gray-900 dark:text-white">
+                    {displayData?.high?.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">最低</div>
+                  <div className="text-xl font-semibold text-gray-900 dark:text-white">
+                    {displayData?.low?.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">成交量</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {displayData?.volume ? (displayData.volume / 10000).toFixed(0) + '万手' : '--'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">成交额</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {displayData?.amount ? (displayData.amount / 100000000).toFixed(2) + '亿' : '--'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">换手率</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {displayData?.turnover_rate != null && displayData.turnover_rate !== undefined 
+                      ? displayData.turnover_rate.toFixed(2) + '%' 
+                      : '--'}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">涨跌幅</div>
-              <div
-                className={`text-2xl font-bold ${
-                  realtimeData.change_percent >= 0
-                    ? 'text-red-600 dark:text-red-400'
-                    : 'text-green-600 dark:text-green-400'
-                }`}
-              >
-                {realtimeData.change_percent >= 0 ? '+' : ''}
-                {realtimeData.change_percent?.toFixed(2)}%
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">最高</div>
-              <div className="text-xl font-semibold text-gray-900 dark:text-white">
-                {realtimeData.high?.toFixed(2)}
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">最低</div>
-              <div className="text-xl font-semibold text-gray-900 dark:text-white">
-                {realtimeData.low?.toFixed(2)}
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">成交量</div>
-              <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                {realtimeData.volume ? (realtimeData.volume / 10000).toFixed(0) + '万手' : '--'}
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">成交额</div>
-              <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                {realtimeData.amount ? (realtimeData.amount / 100000000).toFixed(2) + '亿' : '--'}
-              </div>
-            </div>
-          </div>
+            );
+          })()}
         </div>
       ) : null}
 

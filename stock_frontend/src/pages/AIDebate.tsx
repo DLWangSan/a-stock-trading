@@ -288,15 +288,26 @@ export default function AIDebate() {
             <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
               <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">实时行情</div>
               <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                <div>名称：{realtimeData?.name || displayName}</div>
-                <div>现价：{formatNumber(realtimeData?.current_price)}</div>
-                <div>涨跌幅：{formatNumber(realtimeData?.change_percent)}%</div>
-                <div>昨收：{formatNumber(realtimeData?.yesterday_close)}</div>
-                <div>开盘：{formatNumber(realtimeData?.open)}</div>
-                <div>最高：{formatNumber(realtimeData?.high)}</div>
-                <div>最低：{formatNumber(realtimeData?.low)}</div>
-                <div>成交量：{realtimeData?.volume ? `${formatNumber(realtimeData.volume / 10000, 0)}万手` : '--'}</div>
-                <div>成交额：{realtimeData?.amount ? `${formatNumber(realtimeData.amount / 100000000, 2)}亿` : '--'}</div>
+                {/* 优先使用comprehensiveData中的实时数据（包含换手率），如果没有则使用realtimeData */}
+                {(() => {
+                  const displayData = comprehensiveData?.realtime || realtimeData;
+                  return (
+                    <>
+                      <div>名称：{displayData?.name || displayName}</div>
+                      <div>现价：{formatNumber(displayData?.current_price)}</div>
+                      <div>涨跌幅：{formatNumber(displayData?.change_percent)}%</div>
+                      <div>昨收：{formatNumber(displayData?.yesterday_close)}</div>
+                      <div>开盘：{formatNumber(displayData?.open)}</div>
+                      <div>最高：{formatNumber(displayData?.high)}</div>
+                      <div>最低：{formatNumber(displayData?.low)}</div>
+                      <div>成交量：{displayData?.volume ? `${formatNumber(displayData.volume / 10000, 0)}万手` : '--'}</div>
+                      <div>成交额：{displayData?.amount ? `${formatNumber(displayData.amount / 100000000, 2)}亿` : '--'}</div>
+                      <div>换手率：{displayData?.turnover_rate != null && displayData.turnover_rate !== undefined 
+                        ? `${formatNumber(displayData.turnover_rate, 2)}%` 
+                        : '--'}</div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
             <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
