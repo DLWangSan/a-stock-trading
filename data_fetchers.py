@@ -40,6 +40,11 @@ def get_realtime_data(code):
                         except:
                             pass
                     
+                    # 换手率计算：换手率 = (成交量 / 流通股本) * 100%
+                    # 由于新浪API不直接提供换手率，我们需要通过基本面数据计算
+                    # 这里先返回None，在comprehensive数据中会计算
+                    turnover_rate = None
+                    
                     return {
                         'code': code,
                         'name': fields[0],
@@ -53,6 +58,7 @@ def get_realtime_data(code):
                         'date': fields[30] if len(fields) > 30 else None,
                         'time': fields[31] if len(fields) > 31 else None,
                         'change_percent': change_percent,
+                        'turnover_rate': turnover_rate,  # 将在comprehensive数据中计算
                         'bid1_volume': float(fields[10]) if len(fields) > 10 and fields[10] else None,
                         'bid1_price': float(fields[11]) if len(fields) > 11 and fields[11] else None,
                         'bid2_volume': float(fields[12]) if len(fields) > 12 and fields[12] else None,

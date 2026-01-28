@@ -28,6 +28,8 @@ def format_for_ai(data_dict):
             info.append(f"涨跌幅: {rt.get('change_percent'):.2f}%")
         info.append(f"成交量: {rt.get('volume', 'N/A')} 手")
         info.append(f"成交额: {rt.get('amount', 'N/A')} 元")
+        if rt.get('turnover_rate') is not None:
+            info.append(f"换手率: {rt.get('turnover_rate'):.2f}%")
         if rt.get('bid1_price'):
             info.append(f"买一: {rt.get('bid1_price')} 元 ({rt.get('bid1_volume')} 手)")
         if rt.get('ask1_price'):

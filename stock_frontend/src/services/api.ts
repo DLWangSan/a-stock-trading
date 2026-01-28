@@ -15,6 +15,7 @@ export interface StockRealtime {
   low: number;
   open: number;
   yesterday_close: number;
+  turnover_rate?: number; // 换手率
 }
 
 export interface StockComprehensive {
