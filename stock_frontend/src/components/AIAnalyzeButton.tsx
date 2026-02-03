@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { stockAPI } from '../services/api';
@@ -15,6 +15,7 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
   const [mode, setMode] = useState<'fast' | 'balanced' | 'deep'>('fast');
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const prevShowModalRef = useRef(false);
 
   // 获取启用的Agents
   const { data: agents, isLoading: agentsLoading } = useQuery({
@@ -22,11 +23,13 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
     queryFn: () => stockAPI.getAgents(true),
   });
 
+  // 仅在弹窗「刚打开」时默认全选，避免「清空」后被 useEffect 再次全选
   useEffect(() => {
-    if (showModal && agents && agents.length > 0 && selectedAgentIds.length === 0) {
+    if (showModal && !prevShowModalRef.current && agents && agents.length > 0) {
       setSelectedAgentIds(agents.map((agent) => agent.id));
     }
-  }, [showModal, agents, selectedAgentIds.length]);
+    prevShowModalRef.current = showModal;
+  }, [showModal, agents]);
 
   const toggleAgent = (agentId: number) => {
     setSelectedAgentIds((prev) =>

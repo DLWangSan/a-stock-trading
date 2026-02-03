@@ -870,12 +870,18 @@ def register_routes(app):
                 if _is_job_canceled(db, job_id):
                     _update_debate_job(db, job_id, status='canceled')
                     return
+                # 获取当前时间（每轮分析都更新）
+                current_time = datetime.now()
+                current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+                
                 prompts = []
                 for agent in agents:
                     prev_analysis = "\n\n".join(analysis_memory[agent.id][-2:]) if analysis_memory[agent.id] else "None"
                     prompts.append((
                         agent,
                         f"{agent.prompt}\n\n"
+                        f"{current_time_info}\n\n"
                         f"Stock Data:\n{formatted_data}\n\n"
                         f"Sentiment Data:\n{sentiment_text}\n\n"
                         f"Round {round_idx} Analysis:\n"
@@ -917,6 +923,11 @@ def register_routes(app):
                 if _is_job_canceled(db, job_id):
                     _update_debate_job(db, job_id, status='canceled')
                     return
+                # 获取当前时间（每轮辩论都更新）
+                current_time = datetime.now()
+                current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+                
                 prompts = []
                 other_latest = "\n\n".join([
                     f"{a.name}:\n{analysis_memory[a.id][-1]}"
@@ -930,6 +941,8 @@ def register_routes(app):
                 for agent in agents:
                     prompts.append((
                         agent,
+                        f"{agent.prompt}\n\n"
+                        f"{current_time_info}\n\n"
                         "You are participating in a multi-agent debate.\n\n"
                         f"Debate Round {round_idx}:\n"
                         "Respond with counterarguments, supporting evidence, and actionable insights.\n"
@@ -1076,12 +1089,18 @@ def register_routes(app):
                 if _is_job_canceled(db, job_id):
                     _update_debate_job(db, job_id, status='canceled')
                     return
+                # 获取当前时间（每轮分析都更新）
+                current_time = datetime.now()
+                current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+                
                 prompts = []
                 for agent in agents:
                     prev_analysis = "\n\n".join(analysis_memory[agent.id][-2:]) if analysis_memory[agent.id] else "None"
                     prompts.append((
                         agent,
                         f"{agent.prompt}\n\n"
+                        f"{current_time_info}\n\n"
                         "Multi-Stock Selection Task:\n"
                         f"{combined_data}\n\n"
                         f"{multi_instruction}\n\n"
@@ -1124,6 +1143,11 @@ def register_routes(app):
                 if _is_job_canceled(db, job_id):
                     _update_debate_job(db, job_id, status='canceled')
                     return
+                # 获取当前时间（每轮辩论都更新）
+                current_time = datetime.now()
+                current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+                
                 prompts = []
                 other_latest = "\n\n".join([
                     f"{a.name}:\n{analysis_memory[a.id][-1]}"
@@ -1138,6 +1162,7 @@ def register_routes(app):
                     prompts.append((
                         agent,
                         f"{agent.prompt}\n\n"
+                        f"{current_time_info}\n\n"
                         "You are participating in a multi-agent debate for a multi-stock selection task.\n"
                         f"{multi_instruction}\n\n"
                         f"Debate Round {round_idx}:\n"
@@ -1425,6 +1450,11 @@ def register_routes(app):
             steps = []
             analysis_memory = {agent.id: [] for agent in agents}
 
+            # 获取当前时间
+            current_time = datetime.now()
+            current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+            current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+            
             # 3轮分析
             for round_idx in range(1, analysis_rounds + 1):
                 for agent in agents:
@@ -1432,6 +1462,7 @@ def register_routes(app):
                     prev_analysis = "\n\n".join(analysis_memory[agent.id][-2:]) if analysis_memory[agent.id] else "None"
                     prompt = (
                         f"{agent.prompt}\n\n"
+                        f"{current_time_info}\n\n"
                         f"Stock Data:\n{formatted_data}\n\n"
                         f"Round {round_idx} Analysis:\n"
                         f"Build on your previous analysis and provide new insights without repetition.\n\n"
@@ -1452,6 +1483,11 @@ def register_routes(app):
             # 3轮辩论
             debate_history = []
             for round_idx in range(1, debate_rounds + 1):
+                # 获取当前时间（每轮辩论都更新）
+                current_time = datetime.now()
+                current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+                
                 for agent in agents:
                     provider, api_key, model = resolve_agent_config(agent)
                     other_latest = "\n\n".join([
@@ -1464,6 +1500,8 @@ def register_routes(app):
                     ]) if debate_history else "None"
 
                     prompt = (
+                        f"{agent.prompt}\n\n"
+                        f"{current_time_info}\n\n"
                         "You are participating in a multi-agent debate.\n\n"
                         f"Debate Round {round_idx}:\n"
                         "Respond with counterarguments, supporting evidence, and actionable insights.\n"
@@ -1567,8 +1605,13 @@ def register_routes(app):
             stock_data = get_comprehensive_data_with_indicators(code_str)
             formatted_data = format_for_ai(stock_data)
             
+            # 获取当前时间
+            current_time = datetime.now()
+            current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+            current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
+            
             # 构建完整prompt
-            full_prompt = f"{agent.prompt}\n\nStock Data:\n{formatted_data}\n\nPlease provide your analysis in Chinese."
+            full_prompt = f"{agent.prompt}\n\n{current_time_info}\n\nStock Data:\n{formatted_data}\n\nPlease provide your analysis in Chinese."
             
             # 调用AI
             try:
