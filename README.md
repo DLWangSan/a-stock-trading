@@ -46,6 +46,50 @@ plans.
 - **Feishu integration** — a self-built Feishu bot can trigger the complete
   strategy-to-debate pipeline by command.
 
+## TradingAgents-Inspired Research Team
+
+This project draws inspiration from the collaborative research pattern of
+[TradingAgents](https://github.com/TauricResearch/TradingAgents) and adapts it
+to public A-share data, China-market indicators, local portfolio constraints,
+and a browser-based workflow. It is not a drop-in copy of the upstream project;
+the data adapters, prompts, task persistence, strategy scanners, portfolio
+model, and user interface are implemented for this repository.
+
+Instead of asking one model to make every judgment, the system simulates a
+small investment-research desk:
+
+- **Technical analyst** — K-line structure, moving averages, MACD, RSI, KDJ,
+  BOLL, volume, and key price levels.
+- **Capital-flow analyst** — main, super-large, large, medium, and small-order
+  flows, including short-term persistence.
+- **Fundamental analyst** — valuation, profitability, growth, and financial
+  quality.
+- **Sentiment analyst** — news, announcements, community discussion, and event
+  risks.
+- **Industry analyst** — peer ranking, sector strength, relative performance,
+  and leader linkage.
+- **Bull and bear researchers** — deliberately challenge the consensus from
+  opposite directions.
+- **Intraday and review agents** — focus on T-trading opportunities and test
+  whether the original thesis still holds.
+- **Operator / portfolio manager** — resolves disagreements and converts
+  research into the final action plan.
+
+![Configurable specialist agents](image/agents.png)
+
+The decision process has three stages:
+
+1. **Independent analysis** — selected specialists receive the same market and
+   account evidence and analyze it from their own mandates.
+2. **Cross-agent debate** — agents inspect other opinions, challenge weak
+   assumptions, and revise their conclusions over configurable rounds.
+3. **Final decision** — the operator identifies consensus and conflicts, checks
+   account constraints, and produces a structured Markdown report.
+
+Single-stock and multi-stock tasks support quick, balanced, and deep modes. In
+multi-stock mode, candidates are evaluated under a shared context, and the
+operator may select a primary candidate, a backup candidate, or `NO TRADE`.
+
 ## Four Lights Strategy
 
 The strategy scans liquid A-shares, preselects up to 30 candidates, and ranks
@@ -112,6 +156,20 @@ Held stocks are automatically synchronized to the watchlist.
 4. Let agents challenge or refine other opinions during debate rounds.
 5. Use an operator model to reconcile evidence, constraints, and disagreements.
 6. Persist steps and the final Markdown report for polling and export.
+
+## Interface Gallery
+
+### Market data and interactive K-line analysis
+
+![Stock detail, real-time quote, K-line, and technical indicators](image/information1.png)
+
+### Parallel specialist reasoning
+
+![Multiple agents analyzing the same evidence](image/chat1.png)
+
+### Structured final research report
+
+![Operator-generated Markdown research report](image/result1.png)
 
 ## Project Structure
 
