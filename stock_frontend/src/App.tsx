@@ -7,6 +7,7 @@ import Tasks from './pages/Tasks';
 import Strategy from './pages/Strategy';
 import Settings from './pages/Settings';
 import AIDebate from './pages/AIDebate';
+import Portfolio from './pages/Portfolio';
 import Layout from './components/Layout';
 import './index.css';
 
@@ -31,6 +32,7 @@ function App() {
             <Route path="/stock/:code" element={<StockDetail />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/strategy" element={<Strategy />} />
+            <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/ai-debate" element={<AIDebate />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

@@ -111,7 +111,27 @@ pip install -r requirements.txt
 # 启动服务
 python api_server.py
 ```
-*后端默认运行在 `http://localhost:5000`*
+*后端默认运行在 `http://localhost:5010`；可用环境变量 `PORT` 覆盖。*
+
+#### 策略流水线 + 飞书（指令触发，非定时）
+
+详细图文步骤见 **[docs/feishu_setup.md](docs/feishu_setup.md)**。
+
+1. **HTTP 串行接口**（脚本 / 其它服务调用）：`POST /api/pipeline/strategy_to_multi_debate`
+   - 流程：`GET /api/strategy/strong_stocks` → 取全部强势股代码 → `POST /api/ai/debate/start_multi`（启用中的全部 Agent）。
+   - 请求头必须带：`X-Pipeline-Token: <与服务器环境变量 PIPELINE_TRIGGER_TOKEN 一致>`（或 `Authorization: Bearer <token>`）。
+   - 可选 JSON body：`limit_time`、`agent_ids`、`analysis_rounds`、`debate_rounds`、`override_api_key`。
+   - 若设置环境变量 `FEISHU_WEBHOOK_URL`（群机器人 Webhook），成功启动任务后会向群内发一条简要通知。
+
+2. **飞书机器人 @ 指令**（需在飞书开放平台创建应用并订阅事件，请求 URL 填公网可访问的 `https://你的域名/api/feishu/events`）：
+   - 环境变量：`FEISHU_VERIFICATION_TOKEN`（与事件订阅里「Verification Token」一致）；可选 `PIPELINE_KEYWORD`（默认消息里含 **策略辩论** 四字即触发）；同上可选 `FEISHU_WEBHOOK_URL` 推送结果摘要。
+   - 用户在群里发包含关键词的消息后，后台异步启动上述流水线；辩论进度与报告仍通过现有接口 `GET /api/ai/debate/status/<job_id>` 查询。
+
+*移动端 App 默认后端地址请在 App 内自行改为 `http://<电脑IP>:5010`，与仓库默认端口一致。*
+
+#### Windows 下提示「访问套接字」/绑定端口失败？
+
+多为系统 **TCP 端口排除范围** 或端口占用，可 `netsh interface ipv4 show excludedportrange protocol=tcp` / `netstat -ano | findstr :<端口>` 自查，并改用 `set PORT=其它端口`。
 
 ### 2. 前端部署 (React + Vite)
 ```bash

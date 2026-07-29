@@ -17,13 +17,13 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
   const navigate = useNavigate();
   const prevShowModalRef = useRef(false);
 
-  // 获取启用的Agents
+  // Fetch enabled agents
   const { data: agents, isLoading: agentsLoading } = useQuery({
     queryKey: ['agents', 'enabled'],
     queryFn: () => stockAPI.getAgents(true),
   });
 
-  // 仅在弹窗「刚打开」时默认全选，避免「清空」后被 useEffect 再次全选
+  // Only default to select-all when modal first opens, so "clear" is not overwritten by useEffect
   useEffect(() => {
     if (showModal && !prevShowModalRef.current && agents && agents.length > 0) {
       setSelectedAgentIds(agents.map((agent) => agent.id));
@@ -73,11 +73,11 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
         TradingAgents AI分析
       </button>
 
-      {/* 辩论选择弹窗 */}
+      {/* Debate selection modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-            {/* 头部 */}
+            {/* Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
                 TradingAgents 多Agent辩论
@@ -95,10 +95,10 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
               </button>
             </div>
 
-            {/* 内容 */}
+            {/* Content */}
             <div className="flex-1 overflow-y-auto p-6">
               <div className="space-y-4">
-                  {/* 模式选择 */}
+                  {/* Mode selection */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       选择模式
@@ -140,7 +140,7 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
                     </div>
                   </div>
 
-                {/* Agent选择 */}
+                {/* Agent selection */}
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -189,14 +189,14 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
                   )}
                 </div>
 
-                {/* 错误提示 */}
+                {/* Error message */}
                 {error && (
                   <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 text-red-700 dark:text-red-400">
                     {error}
                   </div>
                 )}
 
-                {/* 进入辩论 */}
+                {/* Enter debate button */}
                 <button
                   onClick={handleStartDebate}
                   disabled={selectedAgentIds.length < 2}

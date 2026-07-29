@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 interface LayoutProps {
   children: ReactNode;
@@ -11,6 +11,7 @@ export default function Layout({ children }: LayoutProps) {
   const navItems = [
     { path: '/', label: '首页' },
     { path: '/watchlist', label: '自选' },
+    { path: '/portfolio', label: '持仓' },
     { path: '/tasks', label: '任务' },
     { path: '/strategy', label: '策略' },
     { path: '/settings', label: '配置' },

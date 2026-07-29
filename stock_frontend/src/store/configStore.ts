@@ -24,7 +24,7 @@ interface ConfigState {
 export const useConfigStore = create<ConfigState>()(
   persist(
     (set) => ({
-      apiBaseURL: 'http://127.0.0.1:5000',
+      apiBaseURL: 'http://127.0.0.1:5010',
       openaiApiKey: '',
       deepseekApiKey: '',
       qwenApiKey: '',

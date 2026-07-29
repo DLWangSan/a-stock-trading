@@ -3,6 +3,8 @@
 """API路由模块"""
 
 from flask import jsonify, request
+import hashlib
+import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +26,17 @@ from db import (
     create_debate_job, update_debate_job, get_debate_job, list_debate_jobs, cancel_debate_job, delete_debate_job
 )
 from ai_service import AIService
+from portfolio_service import build_ai_portfolio_context
+from pipeline_feishu import (
+    execute_strategy_to_multi_debate,
+    check_pipeline_token,
+    feishu_webhook_send_text,
+    parse_feishu_message_text,
+    feishu_should_trigger,
+    handle_feishu_event_body,
+    verify_feishu_event_token,
+    run_pipeline_in_thread,
+)
 
 def register_routes(app):
     """注册所有API路由"""
@@ -66,6 +79,8 @@ def register_routes(app):
                 '/api/ai/debate/stop/<job_id>': '终止辩论任务，POST请求',
                 '/api/ai/debate/delete/<job_id>': '删除辩论任务，DELETE请求',
                 '/api/health': '健康检查',
+                '/api/pipeline/strategy_to_multi_debate': 'POST 强势股筛选→多选一辩论（需 X-Pipeline-Token）',
+                '/api/feishu/events': 'POST 飞书事件订阅回调（指令触发流水线，需配置 FEISHU_VERIFICATION_TOKEN）',
             }
         })
         response.headers['Content-Type'] = 'application/json; charset=utf-8'
@@ -820,7 +835,7 @@ def register_routes(app):
         job = get_debate_job(db, job_id)
         return True if (job and job.canceled) else False
 
-    def _run_debate_job(job_id, code_str, agent_ids, analysis_rounds, debate_rounds):
+    def _run_debate_job(job_id, code_str, agent_ids, analysis_rounds, debate_rounds, override_api_key=None):
         db = SessionLocal()
         try:
             _update_debate_job(db, job_id, status='running', progress=5)
@@ -836,6 +851,7 @@ def register_routes(app):
             print(f"[API] 获取股票数据（辩论）: {code_str}")
             stock_data = get_comprehensive_data_with_indicators(code_str)
             formatted_data = format_for_ai(stock_data)
+            portfolio_context = build_ai_portfolio_context(db, code_str)
 
             # 获取舆情数据（新闻+帖子）
             try:
@@ -856,7 +872,8 @@ def register_routes(app):
 
             def resolve_agent_config(agent):
                 provider = agent.ai_provider or get_config(db, 'default_ai_provider', 'openai')
-                api_key = get_config(db, f'{provider}_api_key')
+                # 移动端可以通过override_api_key传入专属Key，优先使用；否则退回到服务器配置
+                api_key = override_api_key or get_config(db, f'{provider}_api_key')
                 if not api_key:
                     raise ValueError(f'未配置{provider} API Key')
                 model = agent.model or get_config(db, f'{provider}_model', default_model_map.get(provider, 'gpt-3.5-turbo'))
@@ -883,6 +900,7 @@ def register_routes(app):
                         f"{agent.prompt}\n\n"
                         f"{current_time_info}\n\n"
                         f"Stock Data:\n{formatted_data}\n\n"
+                        f"{portfolio_context}\n\n"
                         f"Sentiment Data:\n{sentiment_text}\n\n"
                         f"Round {round_idx} Analysis:\n"
                         f"Build on your previous analysis and provide new insights without repetition.\n\n"
@@ -999,6 +1017,7 @@ def register_routes(app):
                 "Use tables and bullet points where appropriate for readability.\n"
                 "Provide a clear trading operation suggestion in the Final Recommendation section.\n\n"
                 f"Stock Data (key fields):\n{formatted_data}\n\n"
+                f"{portfolio_context}\n\n"
                 f"Sentiment Summary:\n{sentiment_text}\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 "Please output the report in Chinese."
@@ -1023,7 +1042,7 @@ def register_routes(app):
         finally:
             db.close()
 
-    def _run_multi_select_job(job_id, codes, agent_ids, analysis_rounds, debate_rounds):
+    def _run_multi_select_job(job_id, codes, agent_ids, analysis_rounds, debate_rounds, override_api_key=None):
         db = SessionLocal()
         try:
             _update_debate_job(db, job_id, status='running', progress=5)
@@ -1044,9 +1063,9 @@ def register_routes(app):
                 'grok': 'grok-4-0709'
             }
 
-            # 固定裁判，不使用数据库Agent
+            # 固定裁判，不使用数据库Agent。若提供override_api_key则优先使用。
             operator_provider = get_config(db, 'default_ai_provider', 'openai')
-            operator_api_key = get_config(db, f'{operator_provider}_api_key')
+            operator_api_key = override_api_key or get_config(db, f'{operator_provider}_api_key')
             if not operator_api_key:
                 raise ValueError(f'未配置{operator_provider} API Key')
             operator_model = get_config(db, f'{operator_provider}_model', default_model_map.get(operator_provider, 'gpt-3.5-turbo'))
@@ -1067,6 +1086,7 @@ def register_routes(app):
                     stock_blocks.append(f"Stock {code_str}:\nData unavailable: {str(e)}")
 
             combined_data = "\n\n".join(stock_blocks)
+            portfolio_context = build_ai_portfolio_context(db)
             multi_instruction = (
                 "You must choose exactly ONE stock to invest in from the list below. "
                 "A capital MUST be allocated to one of these stocks. "
@@ -1075,7 +1095,7 @@ def register_routes(app):
 
             def resolve_agent_config(agent):
                 provider = agent.ai_provider or get_config(db, 'default_ai_provider', 'openai')
-                api_key = get_config(db, f'{provider}_api_key')
+                api_key = override_api_key or get_config(db, f'{provider}_api_key')
                 if not api_key:
                     raise ValueError(f'未配置{provider} API Key')
                 model = agent.model or get_config(db, f'{provider}_model', default_model_map.get(provider, 'gpt-3.5-turbo'))
@@ -1103,6 +1123,7 @@ def register_routes(app):
                         f"{current_time_info}\n\n"
                         "Multi-Stock Selection Task:\n"
                         f"{combined_data}\n\n"
+                        f"{portfolio_context}\n\n"
                         f"{multi_instruction}\n\n"
                         f"Round {round_idx} Analysis:\n"
                         "Provide new insights and clearly state your preferred stock.\n\n"
@@ -1211,6 +1232,7 @@ def register_routes(app):
                 "You must choose exactly ONE stock to buy from the candidates.\n"
                 "Be bold, concise, and action-oriented. No hedging.\n\n"
                 f"Candidates:\n{combined_data}\n\n"
+                f"{portfolio_context}\n\n"
                 f"Debate Transcript:\n{transcript}\n\n"
                 "Output a Markdown report with sections: Final Choice, Rationale, Entry Plan, Risk Control.\n"
                 "Please output in Chinese."
@@ -1256,6 +1278,7 @@ def register_routes(app):
             agent_ids = data.get('agent_ids', [])
             analysis_rounds = int(data.get('analysis_rounds', 3))
             debate_rounds = int(data.get('debate_rounds', 3))
+            override_api_key = data.get('override_api_key')  # 可选：来自移动端的用户Key
 
             if not isinstance(agent_ids, list) or len(agent_ids) < 2:
                 return jsonify({'success': False, 'error': '至少需要选择2个Agent参与辩论'}), 400
@@ -1277,7 +1300,7 @@ def register_routes(app):
 
             thread = threading.Thread(
                 target=_run_debate_job,
-                args=(job_id, code_str, agent_ids, analysis_rounds, debate_rounds),
+                args=(job_id, code_str, agent_ids, analysis_rounds, debate_rounds, override_api_key),
                 daemon=True
             )
             thread.start()
@@ -1297,6 +1320,7 @@ def register_routes(app):
             agent_ids = data.get('agent_ids', [])
             analysis_rounds = int(data.get('analysis_rounds', 2))
             debate_rounds = int(data.get('debate_rounds', 1))
+            override_api_key = data.get('override_api_key')
 
             if not isinstance(codes, list) or len(codes) < 2:
                 return jsonify({'success': False, 'error': '至少需要选择2只股票'}), 400
@@ -1321,7 +1345,7 @@ def register_routes(app):
 
             thread = threading.Thread(
                 target=_run_multi_select_job,
-                args=(job_id, codes, agent_ids, analysis_rounds, debate_rounds),
+                args=(job_id, codes, agent_ids, analysis_rounds, debate_rounds, override_api_key),
                 daemon=True
             )
             thread.start()
@@ -1429,6 +1453,7 @@ def register_routes(app):
             print(f"[API] 获取股票数据（辩论）: {code_str}")
             stock_data = get_comprehensive_data_with_indicators(code_str)
             formatted_data = format_for_ai(stock_data)
+            portfolio_context = build_ai_portfolio_context(db, code_str)
 
             default_model_map = {
                 'openai': 'gpt-3.5-turbo',
@@ -1464,6 +1489,7 @@ def register_routes(app):
                         f"{agent.prompt}\n\n"
                         f"{current_time_info}\n\n"
                         f"Stock Data:\n{formatted_data}\n\n"
+                        f"{portfolio_context}\n\n"
                         f"Round {round_idx} Analysis:\n"
                         f"Build on your previous analysis and provide new insights without repetition.\n\n"
                         f"Previous Analysis (if any):\n{prev_analysis}\n\n"
@@ -1539,6 +1565,7 @@ def register_routes(app):
                 "Based on the multi-agent analysis and debate transcript, produce a final research report in Markdown.\n"
                 "The report must include sections: Overview, Key Points by Agent, Debate Summary, Risks, Final Recommendation.\n"
                 "Provide a clear trading operation suggestion in the Final Recommendation section.\n\n"
+                f"{portfolio_context}\n\n"
                 f"Transcript:\n{transcript}\n\n"
                 "Please output the report in Chinese."
             )
@@ -1575,15 +1602,20 @@ def register_routes(app):
             data = request.json
             agent_id = data.get('agent_id')
             use_cache = data.get('use_cache', True)
+            override_api_key = data.get('override_api_key')
             
             # 获取Agent配置
             agent = get_agent(db, agent_id)
             if not agent or not agent.enabled:
                 return jsonify({'success': False, 'error': 'Agent不存在或未启用'}), 400
+
+            portfolio_context = build_ai_portfolio_context(db, code_str)
+            context_hash = hashlib.sha1(portfolio_context.encode('utf-8')).hexdigest()[:8]
+            cache_type = f'{agent.type}:{context_hash}'
             
             # 检查缓存
             if use_cache:
-                cached = get_cached_analysis(db, code_str, agent.type, max_age_minutes=30)
+                cached = get_cached_analysis(db, code_str, cache_type, max_age_minutes=30)
                 if cached:
                     return jsonify({
                         'success': True,
@@ -1591,13 +1623,13 @@ def register_routes(app):
                         'cached': True
                     })
             
-            # 获取AI配置
+            # 获取AI配置：移动端可通过override_api_key传入专属Key
             ai_provider = agent.ai_provider or get_config(db, 'default_ai_provider', 'openai')
             api_key_key = f'{ai_provider}_api_key'
-            api_key = get_config(db, api_key_key)
+            api_key = override_api_key or get_config(db, api_key_key)
             if not api_key:
                 return jsonify({'success': False, 'error': f'未配置{ai_provider} API Key'}), 400
-            
+
             model = agent.model or get_config(db, f'{ai_provider}_model', 'gpt-3.5-turbo')
             
             # 获取股票数据
@@ -1611,7 +1643,12 @@ def register_routes(app):
             current_time_info = f"Current Time: {current_time_str} (Weekday: {current_time.strftime('%A')})"
             
             # 构建完整prompt
-            full_prompt = f"{agent.prompt}\n\n{current_time_info}\n\nStock Data:\n{formatted_data}\n\nPlease provide your analysis in Chinese."
+            full_prompt = (
+                f"{agent.prompt}\n\n{current_time_info}\n\n"
+                f"Stock Data:\n{formatted_data}\n\n"
+                f"{portfolio_context}\n\n"
+                "Please provide your analysis in Chinese."
+            )
             
             # 调用AI
             try:
@@ -1637,7 +1674,7 @@ def register_routes(app):
                 
                 # 保存缓存
                 if use_cache:
-                    save_analysis_cache(db, code_str, agent.type, analysis_result)
+                    save_analysis_cache(db, code_str, cache_type, analysis_result)
                 
                 return jsonify({
                     'success': True,
@@ -1950,3 +1987,64 @@ def register_routes(app):
             import traceback
             print(f"[API] 错误堆栈: {traceback.format_exc()}")
             return jsonify({'error': '筛选强势股失败', 'message': error_msg}), 500
+
+    # ==================== 流水线 + 飞书 ====================
+    @app.route('/api/pipeline/strategy_to_multi_debate', methods=['POST'])
+    def pipeline_strategy_to_multi_debate():
+        """策略筛选 → 全选强势股代码 → 启动多选一辩论（供脚本/飞书对接）。"""
+        ok, err = check_pipeline_token(request)
+        if not ok:
+            return jsonify({'success': False, 'error': err}), 401
+        data = request.json or {}
+        limit_time = str(data.get('limit_time', '11:30'))
+        agent_ids = data.get('agent_ids')
+        if agent_ids is not None and not isinstance(agent_ids, list):
+            return jsonify({'success': False, 'error': 'agent_ids 须为数组'}), 400
+        analysis_rounds = int(data.get('analysis_rounds', 2))
+        debate_rounds = int(data.get('debate_rounds', 1))
+        override_api_key = data.get('override_api_key')
+
+        good, result = execute_strategy_to_multi_debate(
+            app,
+            limit_time=limit_time,
+            agent_ids=agent_ids,
+            analysis_rounds=analysis_rounds,
+            debate_rounds=debate_rounds,
+            override_api_key=override_api_key,
+        )
+        if not good:
+            return jsonify({'success': False, 'error': result}), 400
+        wh = (os.environ.get('FEISHU_WEBHOOK_URL') or '').strip()
+        if wh:
+            feishu_webhook_send_text(
+                wh,
+                f"策略流水线已启动\njob_id: {result.get('job_id')}\n股票数: {result.get('count')}",
+            )
+        return jsonify({'success': True, 'data': result})
+
+    @app.route('/api/feishu/events', methods=['POST'])
+    def feishu_events():
+        """飞书开放平台事件订阅：URL 校验 + 群消息关键词触发流水线。"""
+        body = request.get_json(silent=True) or {}
+        ch = handle_feishu_event_body(body)
+        if ch is not None:
+            return jsonify(ch)
+
+        if body.get('schema') == '2.0':
+            header = body.get('header') or {}
+            if not verify_feishu_event_token(header):
+                return jsonify({'code': 403, 'msg': 'verification token mismatch'}), 403
+            et = header.get('event_type')
+            if et == 'im.message.receive_v1':
+                event = body.get('event') or {}
+                text = parse_feishu_message_text(event)
+                if feishu_should_trigger(text):
+                    kw = {
+                        'limit_time': os.environ.get('PIPELINE_LIMIT_TIME', '11:30'),
+                        'analysis_rounds': int(os.environ.get('PIPELINE_ANALYSIS_ROUNDS', '2')),
+                        'debate_rounds': int(os.environ.get('PIPELINE_DEBATE_ROUNDS', '1')),
+                    }
+                    wh = (os.environ.get('FEISHU_WEBHOOK_URL') or '').strip()
+                    run_pipeline_in_thread(app, kw, wh)
+                return jsonify({})
+        return jsonify({})

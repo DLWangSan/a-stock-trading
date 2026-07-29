@@ -25,7 +25,8 @@ export default function AIDebate() {
     queryKey: ['ai-debate-status', jobId],
     queryFn: () => stockAPI.getDebateJobStatus(jobId),
     enabled: !!jobId,
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
+      const data = query.state.data;
       if (!data) return 2000;
       return data.status === 'completed' || data.status === 'failed' ? false : 2000;
     },

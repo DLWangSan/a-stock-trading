@@ -96,6 +96,9 @@ Thumbs.db
 .AppleDouble
 .LSOverride
 
+# Private / non-open-source (Android app + config service)
+ignore/
+
 # Frontend
 stock_frontend/node_modules/
 stock_frontend/dist/

@@ -44,7 +44,7 @@ export default function StockDetail() {
   const { data: dailyData, isLoading: dailyLoading } = useQuery({
     queryKey: ['daily', codeStr],
     queryFn: async () => {
-      const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+      const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5010';
       const response = await fetch(`${apiUrl}/api/sina/comprehensive_with_indicators/${codeStr}`);
       if (!response.ok) {
         throw new Error('Failed to fetch daily data');
@@ -59,7 +59,7 @@ export default function StockDetail() {
   const { data: moneyFlowHistory, isLoading: moneyFlowHistoryLoading } = useQuery({
     queryKey: ['moneyFlowHistory', codeStr],
     queryFn: async () => {
-      const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+      const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5010';
       const response = await fetch(`${apiUrl}/api/sina/money_flow/history/${codeStr}?days=60`);
       if (!response.ok) {
         throw new Error('Failed to fetch money flow history');

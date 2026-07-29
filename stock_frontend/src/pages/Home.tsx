@@ -58,7 +58,7 @@ export default function Home() {
 
   // 获取三大指数数据
   const fetchIndexData = async (code: string) => {
-    const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+    const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5010';
     const res = await fetch(`${apiUrl}/api/sina/realtime/${code}`);
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);

@@ -2,7 +2,7 @@
  * API服务 - 与后端通信
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5010';
 
 export interface StockRealtime {
   code: string;
@@ -22,6 +22,7 @@ export interface StockComprehensive {
   code: string;
   realtime: StockRealtime;
   daily_count: number;
+  daily?: any[];
   indicators?: any;
   money_flow?: any;
   fundamental?: any;
@@ -33,6 +34,57 @@ export interface WatchlistItem {
   code: string;
   name: string;
   sort_order: number;
+}
+
+export type TradingStyle = 'ultra_short' | 'short' | 'medium' | 'long';
+export type RiskLevel = 'conservative' | 'balanced' | 'aggressive';
+
+export interface TradingProfile {
+  style: TradingStyle;
+  style_label: string;
+  holding_horizon: string;
+  focus: string;
+  risk_level: RiskLevel;
+  max_single_position_pct: number;
+  max_total_position_pct: number;
+  default_stop_loss_pct: number;
+  default_take_profit_pct: number;
+  allow_intraday_t: boolean;
+  notes: string;
+  updated_at?: string | null;
+}
+
+export interface Position {
+  id: number;
+  code: string;
+  name: string;
+  quantity: number;
+  available_quantity: number;
+  avg_cost: number;
+  opened_at?: string | null;
+  target_price?: number | null;
+  stop_loss_price?: number | null;
+  thesis: string;
+  notes: string;
+  current_price?: number | null;
+  change_percent?: number | null;
+  market_value?: number | null;
+  cost_value: number;
+  profit?: number | null;
+  profit_pct?: number | null;
+  updated_at?: string | null;
+}
+
+export interface Portfolio {
+  profile: TradingProfile;
+  positions: Position[];
+  summary: {
+    position_count: number;
+    total_cost: number;
+    total_market_value?: number | null;
+    total_profit?: number | null;
+    total_profit_pct?: number | null;
+  };
 }
 
 export interface Agent {
@@ -119,7 +171,14 @@ class StockAPI {
     });
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.statusText}`);
+      let message = response.statusText;
+      try {
+        const body = await response.json();
+        message = body?.error?.message || body?.error || body?.message || message;
+      } catch {
+        // 非 JSON 错误响应保留 HTTP 状态文本
+      }
+      throw new Error(`API Error: ${message}`);
     }
 
     return response.json();
@@ -167,6 +226,54 @@ class StockAPI {
     const data = await this.request<{ success: boolean }>('/api/watchlist/order', {
       method: 'POST',
       body: JSON.stringify({ orders }),
+    });
+    return data.success;
+  }
+
+  // 持仓与交易画像
+  async getPortfolio(): Promise<Portfolio> {
+    const data = await this.request<{ success: boolean; data: Portfolio }>('/api/portfolio');
+    return data.data;
+  }
+
+  async updateTradingProfile(updates: Partial<TradingProfile>): Promise<TradingProfile> {
+    const data = await this.request<{ success: boolean; data: TradingProfile }>('/api/trading-profile', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+    return data.data;
+  }
+
+  async addPosition(position: {
+    code: string;
+    name?: string;
+    quantity: number;
+    available_quantity: number;
+    avg_cost: number;
+    opened_at?: string | null;
+    target_price?: number | null;
+    stop_loss_price?: number | null;
+    thesis?: string;
+    notes?: string;
+  }): Promise<Position> {
+    const data = await this.request<{ success: boolean; data: Position }>('/api/portfolio/positions', {
+      method: 'POST',
+      body: JSON.stringify(position),
+    });
+    return data.data;
+  }
+
+  async updatePosition(id: number, updates: Partial<Position>): Promise<Position> {
+    const data = await this.request<{ success: boolean; data: Position }>(`/api/portfolio/positions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+    return data.data;
+  }
+
+  async removePosition(id: number): Promise<boolean> {
+    const data = await this.request<{ success: boolean }>(`/api/portfolio/positions/${id}`, {
+      method: 'DELETE',
     });
     return data.success;
   }
