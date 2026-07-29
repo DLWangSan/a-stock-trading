@@ -13,11 +13,11 @@ from datetime import datetime
 import json
 import re
 from data_fetchers import get_realtime_data, get_timeline_data, get_minute_kline, get_daily_kline, get_money_flow, get_money_flow_history, get_money_flow_realtime_kline, get_fundamental_data, get_industry_comparison, get_news_from_stock, get_guba_posts
-from technical_indicators import get_comprehensive_data, get_comprehensive_data_with_indicators
+from technical_indicators import calculate_indicators, get_comprehensive_data, get_comprehensive_data_with_indicators
 from data_formatters import format_for_ai, to_json
 import requests
 from datetime import date, timedelta
-from models import get_db, SessionLocal
+from models import get_db, Position, SessionLocal
 from db import (
     get_watchlist, add_to_watchlist, remove_from_watchlist, update_watchlist_order,
     get_config, set_config, get_all_configs,
@@ -26,7 +26,17 @@ from db import (
     create_debate_job, update_debate_job, get_debate_job, list_debate_jobs, cancel_debate_job, delete_debate_job
 )
 from ai_service import AIService
+from four_lights_strategy import scan_four_lights
+from market_context_service import build_market_sentiment_context
 from portfolio_service import build_ai_portfolio_context
+from strategy_scorer import rank_strong_stocks
+from strategy_signal_service import (
+    get_local_capital_flow_map,
+    list_signal_runs,
+    save_capital_flow_snapshots,
+    save_four_lights_run,
+    validate_pending_signals,
+)
 from pipeline_feishu import (
     execute_strategy_to_multi_debate,
     check_pipeline_token,
@@ -65,6 +75,8 @@ def register_routes(app):
                 '/api/sentiment/posts/<code>': '获取股吧帖子（最新+热门），参数: ?latest=10&hot=10',
                 '/api/sentiment/all/<code>': '获取完整舆情数据（新闻+帖子），参数: ?days=7&latest=10&hot=10',
                 '/api/strategy/strong_stocks': '获取强势股（前两个交易日10:30前涨停，当前未涨停）',
+                '/api/strategy/four_lights/scan': 'POST 全市场四灯共振扫描并保存信号',
+                '/api/strategy/four_lights/history': 'GET 四灯信号历史及跨时段验证',
                 '/api/watchlist': '自选股管理，GET获取列表，POST添加',
                 '/api/watchlist/<code>': '自选股管理，DELETE删除',
                 '/api/config': '配置管理，GET获取所有配置，POST设置配置',
@@ -74,6 +86,7 @@ def register_routes(app):
                 '/api/ai/analyze/<code>': 'AI分析股票，POST请求，body: {"agent_id": 1}',
                 '/api/ai/debate/start/<code>': '启动多Agent辩论任务，POST请求',
                 '/api/ai/debate/start_multi': '启动多选一辩论任务，POST: codes, agent_ids, decision_agent_id, analysis_rounds, debate_rounds',
+                '/api/portfolio/analyze': 'POST 一键分析账户、市场情绪和全部持仓',
                 '/api/ai/debate/status/<job_id>': '查询多Agent辩论任务状态',
                 '/api/ai/debate/jobs': '获取辩论任务列表，参数: ?status=active|completed|failed|canceled',
                 '/api/ai/debate/stop/<job_id>': '终止辩论任务，POST请求',
@@ -962,6 +975,9 @@ def register_routes(app):
                         f"{agent.prompt}\n\n"
                         f"{current_time_info}\n\n"
                         "You are participating in a multi-agent debate.\n\n"
+                        f"Current Stock Data:\n{formatted_data}\n\n"
+                        f"{portfolio_context}\n\n"
+                        f"Sentiment Data:\n{sentiment_text}\n\n"
                         f"Debate Round {round_idx}:\n"
                         "Respond with counterarguments, supporting evidence, and actionable insights.\n"
                         "Focus on your unique perspective and address opposing viewpoints.\n\n"
@@ -1000,7 +1016,7 @@ def register_routes(app):
 
             # 资深操作员记录与最终报告
             operator_provider = get_config(db, 'default_ai_provider', 'openai')
-            operator_api_key = get_config(db, f'{operator_provider}_api_key')
+            operator_api_key = override_api_key or get_config(db, f'{operator_provider}_api_key')
             if not operator_api_key:
                 raise ValueError(f'未配置{operator_provider} API Key')
             operator_model = get_config(db, f'{operator_provider}_model', default_model_map.get(operator_provider, 'gpt-3.5-turbo'))
@@ -1015,7 +1031,9 @@ def register_routes(app):
                 "Based on the multi-agent analysis and debate transcript, produce a final research report in Markdown.\n"
                 "The report must include sections: Basic Info, Overview, Key Points by Agent, Debate Summary, Risks, Final Recommendation.\n"
                 "Use tables and bullet points where appropriate for readability.\n"
-                "Provide a clear trading operation suggestion in the Final Recommendation section.\n\n"
+                "Provide a clear trading operation suggestion in the Final Recommendation section, including "
+                "position percentage and amount, entry range, stop loss, take profit, validity period and invalidation conditions. "
+                "NO TRADE is valid when evidence or portfolio capacity is inadequate.\n\n"
                 f"Stock Data (key fields):\n{formatted_data}\n\n"
                 f"{portfolio_context}\n\n"
                 f"Sentiment Summary:\n{sentiment_text}\n\n"
@@ -1042,7 +1060,15 @@ def register_routes(app):
         finally:
             db.close()
 
-    def _run_multi_select_job(job_id, codes, agent_ids, analysis_rounds, debate_rounds, override_api_key=None):
+    def _run_multi_select_job(
+        job_id,
+        codes,
+        agent_ids,
+        analysis_rounds,
+        debate_rounds,
+        override_api_key=None,
+        candidate_context='',
+    ):
         db = SessionLocal()
         try:
             _update_debate_job(db, job_id, status='running', progress=5)
@@ -1088,9 +1114,14 @@ def register_routes(app):
             combined_data = "\n\n".join(stock_blocks)
             portfolio_context = build_ai_portfolio_context(db)
             multi_instruction = (
-                "You must choose exactly ONE stock to invest in from the list below. "
-                "A capital MUST be allocated to one of these stocks. "
-                "Provide your preferred choice and reasoning from your unique perspective."
+                "Choose one primary candidate and at most one backup candidate. "
+                "If no candidate has a favorable risk/reward ratio, explicitly choose NO TRADE. "
+                "Provide your preference and reasoning from your unique perspective."
+            )
+            score_context = (
+                f"Pre-screening quantitative score summary:\n{candidate_context}\n\n"
+                if candidate_context
+                else ''
             )
 
             def resolve_agent_config(agent):
@@ -1122,6 +1153,7 @@ def register_routes(app):
                         f"{agent.prompt}\n\n"
                         f"{current_time_info}\n\n"
                         "Multi-Stock Selection Task:\n"
+                        f"{score_context}"
                         f"{combined_data}\n\n"
                         f"{portfolio_context}\n\n"
                         f"{multi_instruction}\n\n"
@@ -1186,6 +1218,9 @@ def register_routes(app):
                         f"{current_time_info}\n\n"
                         "You are participating in a multi-agent debate for a multi-stock selection task.\n"
                         f"{multi_instruction}\n\n"
+                        f"{score_context}"
+                        f"Current candidate data:\n{combined_data}\n\n"
+                        f"{portfolio_context}\n\n"
                         f"Debate Round {round_idx}:\n"
                         "Respond with counterarguments and emphasize your preferred stock.\n\n"
                         f"Other agents' latest analyses:\n{other_latest}\n\n"
@@ -1228,13 +1263,18 @@ def register_routes(app):
             ])
 
             decision_prompt = (
-                "You are a decisive, ruthless senior trader and final decision maker.\n"
-                "You must choose exactly ONE stock to buy from the candidates.\n"
-                "Be bold, concise, and action-oriented. No hedging.\n\n"
+                "You are a disciplined senior trader and final portfolio decision maker.\n"
+                "Choose ONE primary candidate and at most ONE backup candidate. "
+                "You MUST choose NO TRADE when the setup or portfolio capacity is inadequate.\n"
+                "Be decisive and action-oriented, but never invent missing evidence.\n\n"
+                f"{score_context}"
                 f"Candidates:\n{combined_data}\n\n"
                 f"{portfolio_context}\n\n"
                 f"Debate Transcript:\n{transcript}\n\n"
-                "Output a Markdown report with sections: Final Choice, Rationale, Entry Plan, Risk Control.\n"
+                "Output a Markdown report with sections: Market Decision, Primary Candidate, "
+                "Backup Candidate, Portfolio Allocation, Entry Plan, Risk Control. "
+                "For each actionable candidate include entry range, position percentage and amount, "
+                "stop loss, take profit, validity period and invalidation conditions.\n"
                 "Please output in Chinese."
             )
 
@@ -1265,6 +1305,206 @@ def register_routes(app):
             _update_debate_job(db, job_id, status='failed', error=error_msg)
         finally:
             db.close()
+
+    def _run_portfolio_analysis_job(job_id, agent_ids, override_api_key=None):
+        db = SessionLocal()
+        try:
+            _update_debate_job(db, job_id, status='running', progress=5)
+            agents = []
+            for agent_id in agent_ids:
+                agent = get_agent(db, agent_id)
+                if not agent or not agent.enabled:
+                    raise ValueError(f'Agent不存在或未启用: {agent_id}')
+                agents.append(agent)
+
+            positions = db.query(Position).order_by(Position.updated_at.desc()).all()
+            if not positions:
+                raise ValueError('当前没有持仓，无法执行组合分析')
+
+            portfolio_context = build_ai_portfolio_context(db)
+            market_context = build_market_sentiment_context()
+            stock_blocks = []
+            for position in positions:
+                try:
+                    # 组合分析只取可靠且快速的价量、日K指标和当日资金，
+                    # 避免单只股票基本面/行业接口超时拖慢整个账户分析。
+                    daily = get_daily_kline(position.code, count=120)
+                    if daily is not None and len(daily) > 0:
+                        daily = calculate_indicators(daily)
+                    stock_data = {
+                        'code': position.code,
+                        'realtime': get_realtime_data(position.code),
+                        'daily': daily,
+                        'money_flow': get_money_flow(position.code),
+                    }
+                    stock_blocks.append(
+                        f"持仓 {position.name or position.code}({position.code}):\n"
+                        f"{format_for_ai(stock_data)}"
+                    )
+                except Exception as exc:
+                    stock_blocks.append(
+                        f"持仓 {position.name or position.code}({position.code}): "
+                        f"走势数据获取失败 {str(exc)}"
+                    )
+            holding_market_data = '\n\n'.join(stock_blocks)
+
+            default_model_map = {
+                'openai': 'gpt-3.5-turbo',
+                'deepseek': 'deepseek-chat',
+                'qwen': 'qwen-turbo',
+                'gemini': 'gemini-pro',
+                'siliconflow': 'Qwen/Qwen2.5-7B-Instruct',
+                'grok': 'grok-4-0709',
+            }
+
+            def resolve_agent_config(agent):
+                provider = agent.ai_provider or get_config(db, 'default_ai_provider', 'openai')
+                api_key = override_api_key or get_config(db, f'{provider}_api_key')
+                if not api_key:
+                    raise ValueError(f'未配置{provider} API Key')
+                model = agent.model or get_config(
+                    db,
+                    f'{provider}_model',
+                    default_model_map.get(provider, 'gpt-3.5-turbo'),
+                )
+                return provider, api_key, model
+
+            common_instruction = (
+                "This is a portfolio-level decision, not an isolated stock recommendation. "
+                "Evaluate market regime, account cash and total exposure, concentration, every holding's trend, "
+                "profit/loss and available quantity. Give prioritized account actions for today. "
+                "Do not force a trade and do not suggest selling more than available quantity."
+            )
+            prompts = [
+                (
+                    agent,
+                    f"{agent.prompt}\n\n{common_instruction}\n\n"
+                    f"{market_context}\n\n{portfolio_context}\n\n"
+                    f"All Holding Market Data:\n{holding_market_data}\n\n"
+                    "Output your portfolio-level analysis in Chinese. For every holding state a clear action, "
+                    "position change and trigger condition.",
+                )
+                for agent in agents
+            ]
+
+            steps = []
+            with ThreadPoolExecutor(max_workers=min(6, len(prompts))) as executor:
+                futures = {
+                    executor.submit(AIService.call_agent, *resolve_agent_config(agent), prompt): agent
+                    for agent, prompt in prompts
+                }
+                for future in as_completed(futures):
+                    agent = futures[future]
+                    try:
+                        content = future.result()
+                    except Exception as exc:
+                        content = f'[ERROR] {agent.name} analysis failed: {str(exc)}'
+                    steps.append({
+                        'phase': 'analysis',
+                        'round': 1,
+                        'agent_id': agent.id,
+                        'agent_name': agent.name,
+                        'content': content,
+                        'timestamp': datetime.now().isoformat(),
+                    })
+                    _update_debate_job(
+                        db,
+                        job_id,
+                        steps=steps,
+                        progress=20 + int(len(steps) / len(agents) * 55),
+                    )
+
+            transcript = '\n\n'.join(
+                f"{step['agent_name']}:\n{step['content']}" for step in steps
+            )
+            operator_provider = get_config(db, 'default_ai_provider', 'openai')
+            operator_api_key = override_api_key or get_config(db, f'{operator_provider}_api_key')
+            if not operator_api_key:
+                raise ValueError(f'未配置{operator_provider} API Key')
+            operator_model = get_config(
+                db,
+                f'{operator_provider}_model',
+                default_model_map.get(operator_provider, 'gpt-3.5-turbo'),
+            )
+            final_prompt = (
+                "You are the chief portfolio manager. Produce one decisive Chinese Markdown account action plan.\n"
+                "Reconcile the agent opinions with actual account constraints and current market sentiment.\n"
+                "Required sections: 市场环境、账户体检、持仓逐只操作表、操作优先级、现金与仓位安排、"
+                "做T计划、风险与失效条件。\n"
+                "The holding table must include current position percentage, action, quantity or percentage change, "
+                "price trigger, stop loss, take profit and validity period. NO TRADE is allowed.\n\n"
+                f"{market_context}\n\n{portfolio_context}\n\n"
+                f"All Holding Market Data:\n{holding_market_data}\n\n"
+                f"Agent Opinions:\n{transcript}"
+            )
+            report_md = AIService.call_agent(
+                operator_provider,
+                operator_api_key,
+                operator_model,
+                final_prompt,
+            )
+            steps.append({
+                'phase': 'debate',
+                'round': 1,
+                'agent_id': 0,
+                'agent_name': '组合经理（最终决策）',
+                'content': report_md,
+                'timestamp': datetime.now().isoformat(),
+            })
+            _update_debate_job(
+                db,
+                job_id,
+                status='completed',
+                progress=100,
+                report_md=report_md,
+                steps=steps,
+                error=None,
+            )
+        except Exception as exc:
+            print(f'[API] 组合分析失败: {exc}')
+            _update_debate_job(db, job_id, status='failed', error=str(exc))
+        finally:
+            db.close()
+
+    @app.route('/api/portfolio/analyze', methods=['POST'])
+    def start_portfolio_analysis_api():
+        """启动账户、市场情绪和全部持仓的一键组合分析。"""
+        try:
+            body = request.get_json(silent=True) or {}
+            agent_ids = body.get('agent_ids') or []
+            override_api_key = body.get('override_api_key')
+            if not isinstance(agent_ids, list) or len(agent_ids) < 2:
+                return jsonify({'success': False, 'error': '至少选择2个Agent'}), 400
+
+            db = SessionLocal()
+            try:
+                positions = db.query(Position).all()
+                if not positions:
+                    return jsonify({'success': False, 'error': '当前没有持仓'}), 400
+                job_id = str(uuid.uuid4())
+                job_name = f"账户持仓整体分析 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                codes = [position.code for position in positions]
+                create_debate_job(
+                    db,
+                    job_id,
+                    ','.join(codes),
+                    job_name,
+                    agent_ids,
+                    1,
+                    1,
+                    meta={'mode': 'portfolio', 'codes': codes},
+                )
+            finally:
+                db.close()
+
+            threading.Thread(
+                target=_run_portfolio_analysis_job,
+                args=(job_id, agent_ids, override_api_key),
+                daemon=True,
+            ).start()
+            return jsonify({'success': True, 'data': {'job_id': job_id, 'name': job_name}})
+        except Exception as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 500
 
     @app.route('/api/ai/debate/start/<code>', methods=['POST'])
     def start_debate_job_api(code):
@@ -1321,6 +1561,7 @@ def register_routes(app):
             analysis_rounds = int(data.get('analysis_rounds', 2))
             debate_rounds = int(data.get('debate_rounds', 1))
             override_api_key = data.get('override_api_key')
+            candidate_context = str(data.get('candidate_context') or '')[:12000]
 
             if not isinstance(codes, list) or len(codes) < 2:
                 return jsonify({'success': False, 'error': '至少需要选择2只股票'}), 400
@@ -1345,7 +1586,15 @@ def register_routes(app):
 
             thread = threading.Thread(
                 target=_run_multi_select_job,
-                args=(job_id, codes, agent_ids, analysis_rounds, debate_rounds, override_api_key),
+                args=(
+                    job_id,
+                    codes,
+                    agent_ids,
+                    analysis_rounds,
+                    debate_rounds,
+                    override_api_key,
+                    candidate_context,
+                ),
                 daemon=True
             )
             thread.start()
@@ -1708,6 +1957,53 @@ def register_routes(app):
             return None, None
     
     # ==================== 策略API ====================
+
+    @app.route('/api/strategy/four_lights/scan', methods=['POST'])
+    def scan_four_lights_api():
+        """扫描全市场高流动性股票，返回四灯共振 Top 候选并保存快照。"""
+        db = SessionLocal()
+        try:
+            body = request.get_json(silent=True) or {}
+            session = str(body.get('session') or 'auto')
+            top_n = max(2, min(int(body.get('top_n', 5)), 10))
+            result = scan_four_lights(
+                session=session,
+                top_n=top_n,
+                local_capital_flows=get_local_capital_flow_map(db),
+            )
+            capital_snapshots = result.pop('_capital_snapshots', [])
+            save_capital_flow_snapshots(db, capital_snapshots)
+            result['run_id'] = save_four_lights_run(db, result)
+            result['validation_target'] = (
+                '当日14:30后验证'
+                if result['session'] == 'morning'
+                else '下一交易日验证'
+            )
+            return jsonify({'success': True, 'data': result})
+        except ValueError as exc:
+            db.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        except Exception as exc:
+            db.rollback()
+            print(f"[API] 四灯策略扫描失败: {exc}")
+            return jsonify({'success': False, 'error': f'四灯策略扫描失败: {str(exc)}'}), 500
+        finally:
+            db.close()
+
+    @app.route('/api/strategy/four_lights/history', methods=['GET'])
+    def four_lights_history_api():
+        """读取历史信号；到达验证时点时自动记录当前收益。"""
+        db = SessionLocal()
+        try:
+            if request.args.get('validate', 'true').lower() in ('1', 'true', 'yes'):
+                validate_pending_signals(db)
+            limit = max(1, min(int(request.args.get('limit', 10)), 30))
+            return jsonify({
+                'success': True,
+                'data': list_signal_runs(db, limit_runs=limit),
+            })
+        finally:
+            db.close()
     
     @app.route('/api/strategy/strong_stocks')
     def get_strong_stocks():
@@ -1715,6 +2011,7 @@ def register_routes(app):
         try:
             # 获取参数：涨停截止时间，默认11:30
             limit_time = request.args.get('limit_time', '11:30')  # 涨停截止时间（T-1和T-2共用）
+            top_n = max(2, min(int(request.args.get('top_n', 5)), 10))
             
             print(f"[API] 开始筛选强势股... 截止时间={limit_time}")
             
@@ -1964,13 +2261,19 @@ def register_routes(app):
                     
                     result_stocks.append(stock_data)
             
-            print(f"[API] 返回强势股数据，共 {len(result_stocks)} 只")
+            result_stocks = rank_strong_stocks(result_stocks, top_n=top_n)
+            recommended_count = sum(1 for stock in result_stocks if stock['recommended'])
+            print(
+                f"[API] 返回强势股数据，共 {len(result_stocks)} 只，"
+                f"推荐 {recommended_count} 只"
+            )
             
             return jsonify({
                 'strategy': 'strong_stocks',
                 'description': f'T-1和T-2日{limit_time}前涨停，T日未涨停',
                 'params': {
                     'limit_time': limit_time,
+                    'top_n': top_n,
                 },
                 'trade_dates': {
                     'T': t_date.strftime('%Y-%m-%d'),
@@ -1978,6 +2281,7 @@ def register_routes(app):
                     'T-2': t2_date.strftime('%Y-%m-%d'),
                 },
                 'count': len(result_stocks),
+                'recommended_count': recommended_count,
                 'stocks': result_stocks
             })
         

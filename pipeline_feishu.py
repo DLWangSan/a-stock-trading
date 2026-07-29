@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
 
+from agent_selection import select_core_agent_ids
+
 
 def check_pipeline_token(request) -> Tuple[bool, Optional[str]]:
     token = (os.environ.get("PIPELINE_TRIGGER_TOKEN") or "").strip()
@@ -52,8 +54,10 @@ def execute_strategy_to_multi_debate(
             return False, {"error": "strategy_empty"}
 
         stocks = data.get("stocks") or []
+        recommended = [s for s in stocks if isinstance(s, dict) and s.get("recommended")]
+        selected_stocks = recommended or stocks[:5]
         codes = []
-        for s in stocks:
+        for s in selected_stocks:
             c = s.get("code") if isinstance(s, dict) else None
             if c:
                 c = str(c).strip()
@@ -74,7 +78,7 @@ def execute_strategy_to_multi_debate(
             db = SessionLocal()
             try:
                 agents = get_agents(db, enabled_only=True)
-                resolved_ids = [a.id for a in agents]
+                resolved_ids = select_core_agent_ids(agents)
             finally:
                 db.close()
 
@@ -86,6 +90,15 @@ def execute_strategy_to_multi_debate(
             "agent_ids": resolved_ids,
             "analysis_rounds": analysis_rounds,
             "debate_rounds": debate_rounds,
+            "candidate_context": "\n".join([
+                (
+                    f"{stock.get('rank', '-')}. {stock.get('name', '')}({stock.get('code')}): "
+                    f"量化评分 {stock.get('score', 'N/A')}，"
+                    f"优势 {'；'.join(stock.get('score_reasons') or ['无'])}，"
+                    f"风险 {'；'.join((stock.get('risk_flags') or []) + (stock.get('hard_filter_reasons') or [])) or '无'}"
+                )
+                for stock in selected_stocks
+            ]),
         }
         if override_api_key:
             body["override_api_key"] = override_api_key

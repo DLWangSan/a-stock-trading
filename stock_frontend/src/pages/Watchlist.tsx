@@ -5,6 +5,7 @@ import { useWatchlistStore } from '../store/watchlistStore';
 import { stockAPI } from '../services/api';
 import AIAnalyzeButton from '../components/AIAnalyzeButton';
 import type { Agent } from '../services/api';
+import { getDefaultAgentIds } from '../utils/agentSelection';
 
 // 判断是否在交易时间
 function isTradingTime(): boolean {
@@ -29,7 +30,7 @@ function getRefetchInterval(): number {
 }
 
 export default function Watchlist() {
-  const { items, loading, addStock, removeStock } = useWatchlistStore();
+  const { items, loading, fetchWatchlist, addStock, removeStock } = useWatchlistStore();
   const [codeInput, setCodeInput] = useState('');
   const [adding, setAdding] = useState(false);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
@@ -39,6 +40,10 @@ export default function Watchlist() {
   const [multiError, setMultiError] = useState<string | null>(null);
   const navigate = useNavigate();
 
+  useEffect(() => {
+    void fetchWatchlist();
+  }, [fetchWatchlist]);
+
   const { data: agents, isLoading: agentsLoading } = useQuery({
     queryKey: ['agents', 'enabled'],
     queryFn: () => stockAPI.getAgents(true),
@@ -47,7 +52,7 @@ export default function Watchlist() {
 
   useEffect(() => {
     if (showMultiModal && agents && agents.length > 0 && selectedAgentIds.length === 0) {
-      setSelectedAgentIds(agents.map((agent) => agent.id));
+      setSelectedAgentIds(getDefaultAgentIds(agents));
     }
   }, [showMultiModal, agents, selectedAgentIds.length]);
 

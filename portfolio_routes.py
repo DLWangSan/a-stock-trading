@@ -7,10 +7,11 @@ from datetime import datetime
 from flask import jsonify, request
 
 from data_fetchers import get_realtime_data
-from models import Position, SessionLocal
+from models import Position, SessionLocal, Watchlist
 from portfolio_service import (
     RISK_LEVELS,
     STYLE_META,
+    build_portfolio_snapshot,
     get_or_create_profile,
     serialize_position,
     serialize_profile,
@@ -44,6 +45,22 @@ def _validate_position_payload(data, existing=None):
     return code, quantity, available, avg_cost
 
 
+def _sync_positions_to_watchlist(db):
+    """持仓必定出现在自选中；移除持仓时保留自选记录。"""
+    existing_codes = {
+        row[0] for row in db.query(Watchlist.code).all()
+    }
+    added = 0
+    for position in db.query(Position).all():
+        if position.code not in existing_codes:
+            db.add(Watchlist(code=position.code, name=position.name))
+            existing_codes.add(position.code)
+            added += 1
+    if added:
+        db.commit()
+    return added
+
+
 def register_portfolio_routes(app):
     @app.route('/api/trading-profile', methods=['GET', 'PUT'])
     def trading_profile_api():
@@ -72,6 +89,11 @@ def register_portfolio_routes(app):
                         if value < 0 or value > 100:
                             return jsonify({'success': False, 'error': f'{field} 必须在0到100之间'}), 400
                         setattr(profile, field, value)
+                if 'available_cash' in data:
+                    available_cash = float(data['available_cash'])
+                    if available_cash < 0:
+                        return jsonify({'success': False, 'error': 'available_cash 不能为负数'}), 400
+                    profile.available_cash = available_cash
                 if 'allow_intraday_t' in data:
                     profile.allow_intraday_t = bool(data['allow_intraday_t'])
                 if 'notes' in data:
@@ -89,36 +111,14 @@ def register_portfolio_routes(app):
     def portfolio_api():
         db = SessionLocal()
         try:
-            profile = get_or_create_profile(db)
-            positions = db.query(Position).order_by(Position.updated_at.desc()).all()
-            rows = []
-            for position in positions:
-                try:
-                    realtime = get_realtime_data(position.code)
-                except Exception:
-                    realtime = None
-                rows.append(serialize_position(position, realtime))
-
-            total_cost = sum(item['cost_value'] for item in rows)
-            market_values = [item['market_value'] for item in rows if item['market_value'] is not None]
-            total_market_value = sum(market_values) if market_values else None
-            total_profit = total_market_value - total_cost if total_market_value is not None else None
+            _sync_positions_to_watchlist(db)
+            snapshot = build_portfolio_snapshot(db)
             return jsonify({
                 'success': True,
                 'data': {
-                    'profile': serialize_profile(profile),
-                    'positions': rows,
-                    'summary': {
-                        'position_count': len(rows),
-                        'total_cost': total_cost,
-                        'total_market_value': total_market_value,
-                        'total_profit': total_profit,
-                        'total_profit_pct': (
-                            total_profit / total_cost * 100
-                            if total_profit is not None and total_cost > 0
-                            else None
-                        ),
-                    },
+                    'profile': serialize_profile(snapshot['profile']),
+                    'positions': snapshot['positions'],
+                    'summary': snapshot['summary'],
                 },
             })
         finally:
@@ -152,6 +152,7 @@ def register_portfolio_routes(app):
             db.add(position)
             db.commit()
             db.refresh(position)
+            _sync_positions_to_watchlist(db)
             return jsonify({'success': True, 'data': serialize_position(position)}), 201
         except ValueError as e:
             db.rollback()
@@ -196,6 +197,7 @@ def register_portfolio_routes(app):
                     setattr(position, field, float(data[field]) if data[field] not in (None, '') else None)
             db.commit()
             db.refresh(position)
+            _sync_positions_to_watchlist(db)
             return jsonify({'success': True, 'data': serialize_position(position)})
         except ValueError as e:
             db.rollback()

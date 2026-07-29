@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { stockAPI } from '../services/api';
 import { Link, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { getDefaultAgentIds } from '../utils/agentSelection';
+import type { FourLightsCandidate, FourLightsRun, FourLightsScan } from '../services/api';
 
 interface StrongStock {
   code: string;
@@ -16,6 +18,13 @@ interface StrongStock {
   change_percent: number | null;
   volume: number | null;
   amount: number | null;
+  score: number;
+  rank: number;
+  eligible: boolean;
+  recommended: boolean;
+  score_reasons: string[];
+  risk_flags: string[];
+  hard_filter_reasons: string[];
 }
 
 interface StrongStocksResponse {
@@ -30,6 +39,7 @@ interface StrongStocksResponse {
     'T-2': string;
   };
   count: number;
+  recommended_count: number;
   stocks: StrongStock[];
 }
 
@@ -39,7 +49,12 @@ const TIME_OPTIONS = [
 ];
 
 export default function Strategy() {
+  const [activeStrategy, setActiveStrategy] = useState<'strong' | 'four_lights'>('strong');
   const [limitTime, setLimitTime] = useState('11:30');
+  const [fourLightsSession, setFourLightsSession] = useState<'auto' | 'morning' | 'afternoon'>('auto');
+  const [fourLightsData, setFourLightsData] = useState<FourLightsScan | null>(null);
+  const [fourLightsScanning, setFourLightsScanning] = useState(false);
+  const [fourLightsError, setFourLightsError] = useState<string | null>(null);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [showMultiModal, setShowMultiModal] = useState(false);
   const [selectedAgentIds, setSelectedAgentIds] = useState<number[]>([]);
@@ -48,11 +63,19 @@ export default function Strategy() {
   const [addingMap, setAddingMap] = useState<Record<string, boolean>>({});
   const [addedMap, setAddedMap] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
+  const prevShowMultiModalRef = useRef(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<StrongStocksResponse>({
     queryKey: ['strong-stocks', limitTime],
     queryFn: () => stockAPI.getStrongStocks(limitTime),
     refetchInterval: 60000, // 每分钟刷新一次
+    enabled: activeStrategy === 'strong',
+  });
+
+  const { data: fourLightsHistory = [], refetch: refetchFourLightsHistory } = useQuery<FourLightsRun[]>({
+    queryKey: ['four-lights-history'],
+    queryFn: () => stockAPI.getFourLightsHistory(6),
+    enabled: activeStrategy === 'four_lights',
   });
 
   const { data: agents, isLoading: agentsLoading } = useQuery({
@@ -62,10 +85,11 @@ export default function Strategy() {
   });
 
   useEffect(() => {
-    if (showMultiModal && agents && agents.length > 0 && selectedAgentIds.length === 0) {
-      setSelectedAgentIds(agents.map((agent) => agent.id));
+    if (showMultiModal && !prevShowMultiModalRef.current && agents && agents.length > 0) {
+      setSelectedAgentIds(getDefaultAgentIds(agents));
     }
-  }, [showMultiModal, agents, selectedAgentIds.length]);
+    prevShowMultiModalRef.current = showMultiModal;
+  }, [showMultiModal, agents]);
 
   const formatNumber = (num: number | null | undefined): string => {
     if (num === null || num === undefined) return '-';
@@ -94,6 +118,22 @@ export default function Strategy() {
     setSelectedCodes((prev) =>
       prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
     );
+  };
+
+  const handleScanFourLights = async () => {
+    setFourLightsScanning(true);
+    setFourLightsError(null);
+    setSelectedCodes([]);
+    try {
+      const result = await stockAPI.scanFourLights(fourLightsSession);
+      setFourLightsData(result);
+      setSelectedCodes(result.stocks.map((stock) => stock.code));
+      await refetchFourLightsHistory();
+    } catch (e) {
+      setFourLightsError(e instanceof Error ? e.message : '四灯策略扫描失败');
+    } finally {
+      setFourLightsScanning(false);
+    }
   };
 
   const handleAddWatchlist = async (code: string, name: string) => {
@@ -135,11 +175,22 @@ export default function Strategy() {
         balanced: { analysisRounds: 2, debateRounds: 1 },
         deep: { analysisRounds: 3, debateRounds: 2 },
       }[multiMode];
+      const candidateContext = activeStrategy === 'four_lights'
+        ? fourLightsData?.stocks
+          .filter((stock) => selectedCodes.includes(stock.code))
+          .map((stock) => (
+            `${stock.rank}. ${stock.name}(${stock.code})：四灯${stock.light_count}/4，`
+            + `评分${stock.score}，建议持有1至5个交易日，`
+            + `点亮${Object.entries(stock.lights).filter(([, on]) => on).map(([key]) => key).join('/')}`
+          ))
+          .join('\n')
+        : undefined;
       const res = await stockAPI.startMultiSelectDebate(
         selectedCodes,
         selectedAgentIds,
         modeConfig.analysisRounds,
-        modeConfig.debateRounds
+        modeConfig.debateRounds,
+        candidateContext
       );
       setShowMultiModal(false);
       const params = new URLSearchParams();
@@ -157,7 +208,12 @@ export default function Strategy() {
       {/* 策略卡片 - 始终显示 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         {/* 强势股策略 */}
-        <div className="bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl p-6 text-white shadow-lg">
+        <div
+          onClick={() => { setActiveStrategy('strong'); setSelectedCodes([]); }}
+          className={`cursor-pointer bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl p-6 text-white shadow-lg ring-offset-2 ${
+            activeStrategy === 'strong' ? 'ring-4 ring-blue-300' : ''
+          }`}
+        >
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold">强势股策略</h2>
             {isLoading ? (
@@ -209,14 +265,53 @@ export default function Strategy() {
           ) : null}
         </div>
 
-        {/* 其他策略待开发 */}
-        <div className="bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-700 rounded-xl p-6 shadow-lg flex items-center justify-center">
-          <div className="text-center">
-            <svg className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">其他策略</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">正在开发中...</p>
+        {/* 全市场四灯策略 */}
+        <div
+          onClick={() => { setActiveStrategy('four_lights'); setSelectedCodes([]); }}
+          className={`cursor-pointer rounded-xl bg-gradient-to-br from-purple-500 to-indigo-700 p-6 text-white shadow-lg ring-offset-2 ${
+            activeStrategy === 'four_lights' ? 'ring-4 ring-purple-300' : ''
+          }`}
+        >
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold">四灯共振 AI策略</h2>
+              <p className="mt-1 text-sm text-purple-100">短线偏超短 · 建议持有1至5个交易日</p>
+            </div>
+            <div className="text-right">
+              <div className="text-4xl font-bold">{fourLightsData?.count || 0}</div>
+              <div className="text-sm text-purple-100">建议候选</div>
+            </div>
+          </div>
+          <div className="rounded-lg bg-white/10 p-3">
+            <div className="mb-3 flex flex-wrap gap-2 text-xs">
+              {['趋势灯', '动量灯', '量价灯', '资金灯'].map((label) => (
+                <span key={label} className="rounded-full bg-white/20 px-2 py-1">{label}</span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={fourLightsSession}
+                onChange={(e) => setFourLightsSession(e.target.value as typeof fourLightsSession)}
+                onClick={(e) => e.stopPropagation()}
+                className="rounded-lg border border-white/30 bg-white/20 px-3 py-2 text-sm"
+              >
+                <option value="auto" className="text-gray-900">自动识别时段</option>
+                <option value="morning" className="text-gray-900">早盘扫描</option>
+                <option value="afternoon" className="text-gray-900">尾盘扫描</option>
+              </select>
+              <button
+                onClick={(e) => { e.stopPropagation(); setActiveStrategy('four_lights'); void handleScanFourLights(); }}
+                disabled={fourLightsScanning}
+                className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-purple-700 disabled:opacity-60"
+              >
+                {fourLightsScanning ? '扫描中...' : '立即扫描并记录'}
+              </button>
+            </div>
+            {fourLightsData && (
+              <div className="mt-3 text-xs text-purple-100">
+                {fourLightsData.session === 'morning' ? '早盘信号' : '尾盘信号'} · {fourLightsData.validation_target}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -233,7 +328,9 @@ export default function Strategy() {
 
       {/* 筛选结果标题和刷新按钮 - 始终显示 */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">筛选结果</h2>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+          {activeStrategy === 'strong' ? '强势股筛选结果' : '四灯共振建议'}
+        </h2>
         <div className="flex items-center gap-3">
           {selectedCodes.length >= 2 && (
             <button
@@ -244,20 +341,20 @@ export default function Strategy() {
             </button>
           )}
           <button
-            onClick={() => refetch()}
-            disabled={isFetching}
+            onClick={() => activeStrategy === 'strong' ? refetch() : handleScanFourLights()}
+            disabled={activeStrategy === 'strong' ? isFetching : fourLightsScanning}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <svg className={`h-5 w-5 ${isFetching ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className={`h-5 w-5 ${(activeStrategy === 'strong' ? isFetching : fourLightsScanning) ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            {isFetching ? '刷新中...' : '刷新数据'}
+            {(activeStrategy === 'strong' ? isFetching : fourLightsScanning) ? '扫描中...' : activeStrategy === 'strong' ? '刷新数据' : '重新扫描'}
           </button>
         </div>
       </div>
 
       {/* 股票列表 - 根据状态渲染 */}
-      {isLoading ? (
+      {activeStrategy === 'strong' ? (isLoading ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-12">
           <div className="flex flex-col items-center justify-center">
             <LoadingSpinner size="large" />
@@ -296,6 +393,9 @@ export default function Strategy() {
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     名称
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    评分
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     行业
@@ -341,7 +441,22 @@ export default function Strategy() {
                       {stock.code}
                     </td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                      {stock.name}
+                      <div>{stock.name}</div>
+                      {stock.recommended && (
+                        <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 py-0.5 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                          Top推荐
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-4 text-sm">
+                      <div className={`font-semibold ${stock.eligible ? 'text-purple-600' : 'text-gray-400'}`}>
+                        #{stock.rank} · {stock.score.toFixed(1)}
+                      </div>
+                      <div className="mt-1 max-w-48 text-xs text-gray-500" title={[...stock.score_reasons, ...stock.risk_flags, ...stock.hard_filter_reasons].join('；')}>
+                        {stock.eligible
+                          ? stock.score_reasons[0] || '数据有限'
+                          : stock.hard_filter_reasons[0] || '未通过硬过滤'}
+                      </div>
                     </td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                       {stock.industry || '-'}
@@ -411,6 +526,18 @@ export default function Strategy() {
             </table>
           </div>
         </div>
+      )) : (
+        <FourLightsResults
+          data={fourLightsData}
+          history={fourLightsHistory}
+          scanning={fourLightsScanning}
+          error={fourLightsError}
+          selectedCodes={selectedCodes}
+          onToggle={toggleSelectCode}
+          onAddWatchlist={handleAddWatchlist}
+          addingMap={addingMap}
+          addedMap={addedMap}
+        />
       )}
 
       {/* 多选一 模态 */}
@@ -433,7 +560,7 @@ export default function Strategy() {
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               <div className="text-sm text-gray-600 dark:text-gray-400">
-                本模式要求从所选股票中<strong>必须选择一只</strong>进行买入决策。
+                系统将给出1只主选、最多1只备选；机会不足时可以明确选择暂不交易。
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -478,8 +605,30 @@ export default function Strategy() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  选择参与辩论的Agent（至少2个）
+                  选择参与辩论的Agent（默认核心5个，可继续增选）
                 </label>
+                {agents && agents.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setSelectedAgentIds(getDefaultAgentIds(agents))}
+                      className="rounded bg-purple-100 px-2 py-1 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+                    >
+                      核心5个
+                    </button>
+                    <button
+                      onClick={() => setSelectedAgentIds(agents.map((agent) => agent.id))}
+                      className="rounded bg-gray-100 px-2 py-1 text-xs dark:bg-gray-700"
+                    >
+                      全选
+                    </button>
+                    <button
+                      onClick={() => setSelectedAgentIds([])}
+                      className="rounded bg-gray-100 px-2 py-1 text-xs dark:bg-gray-700"
+                    >
+                      清空
+                    </button>
+                  </div>
+                )}
                 {agentsLoading ? (
                   <div className="text-gray-500">加载中...</div>
                 ) : agents && agents.length > 0 ? (
@@ -526,5 +675,193 @@ export default function Strategy() {
         </div>
       )}
     </div>
+  );
+}
+
+const LIGHT_LABELS: Record<keyof FourLightsCandidate['lights'], string> = {
+  trend: '趋势',
+  momentum: '动量',
+  volume: '量价',
+  capital: '资金',
+};
+
+const LIGHT_TITLES: Record<keyof FourLightsCandidate['lights'], string> = {
+  trend: '现价 > MA5 > MA10 > MA20，且 MACD DIF ≥ DEA',
+  momentum: 'RSI 50–75，5日涨幅 0–18%，当日涨幅 -1.5%–6%',
+  volume: '成交额≥3亿元，换手率2%–15%，预计量比1.1–3.5',
+  capital: '5日累计净流入为正且至少3日流入；缺失时按当日净流入占比≥3%降级',
+};
+
+function FourLightsResults({
+  data,
+  history,
+  scanning,
+  error,
+  selectedCodes,
+  onToggle,
+  onAddWatchlist,
+  addingMap,
+  addedMap,
+}: {
+  data: FourLightsScan | null;
+  history: FourLightsRun[];
+  scanning: boolean;
+  error: string | null;
+  selectedCodes: string[];
+  onToggle: (code: string) => void;
+  onAddWatchlist: (code: string, name: string) => Promise<void>;
+  addingMap: Record<string, boolean>;
+  addedMap: Record<string, boolean>;
+}) {
+  if (scanning && !data) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white p-12 dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex flex-col items-center">
+          <LoadingSpinner size="large" />
+          <p className="mt-4 text-gray-500">正在扫描全市场并计算四灯，通常需要10至30秒...</p>
+        </div>
+      </div>
+    );
+  }
+  if (error) {
+    return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
+  }
+  if (!data) {
+    return (
+      <div className="rounded-lg border border-dashed border-purple-300 bg-purple-50/50 py-14 text-center dark:border-purple-800 dark:bg-purple-900/10">
+        <div className="text-lg font-medium text-purple-800 dark:text-purple-300">尚未执行四灯扫描</div>
+        <p className="mt-2 text-sm text-gray-500">早盘信号在14:30后验证；尾盘信号在下一交易日验证。</p>
+        {history.length > 0 && <SignalHistory history={history} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-lg border border-purple-200 bg-purple-50 p-4 text-sm text-purple-800 dark:border-purple-800 dark:bg-purple-900/20 dark:text-purple-200">
+        本次从成交额靠前的 {data.universe_count} 只全市场高流动性股票中预筛
+        {' '}{data.preselected_count} 只，得到 {data.count} 只评分靠前候选，其中
+        {' '}{data.actionable_count} 只达到三灯以上可操作标准；其余仅供观察和Agent复核。
+        策略周期：{data.holding_horizon}。信号时段：{data.session === 'morning' ? '早盘' : '尾盘'}；{data.validation_target}。
+      </div>
+      {data.stocks.length === 0 ? (
+        <div className="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 dark:border-gray-700 dark:bg-gray-800">
+          当前没有达到三灯共振的标的，建议暂不交易。
+        </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {data.stocks.map((stock) => (
+            <article key={stock.code} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex items-start justify-between gap-3">
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedCodes.includes(stock.code)}
+                    onChange={() => onToggle(stock.code)}
+                    className="mt-1 rounded"
+                  />
+                  <span>
+                    <span className="block text-lg font-semibold text-gray-900 dark:text-white">
+                      #{stock.rank} {stock.name} <span className="text-sm text-gray-500">{stock.code}</span>
+                      <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${
+                        stock.actionable
+                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                      }`}>
+                        {stock.actionable ? '可操作候选' : '观察候选'}
+                      </span>
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      ¥{stock.current_price.toFixed(2)} · {stock.change_percent >= 0 ? '+' : ''}{stock.change_percent.toFixed(2)}%
+                      {' '}· 换手 {stock.turnover_rate.toFixed(2)}%
+                    </span>
+                  </span>
+                </label>
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-purple-600">{stock.score.toFixed(1)}</div>
+                  <div className="text-xs text-gray-500">{stock.light_count}/4 灯</div>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-4 gap-2">
+                {(Object.keys(LIGHT_LABELS) as Array<keyof FourLightsCandidate['lights']>).map((key) => (
+                  <div
+                    key={key}
+                    title={LIGHT_TITLES[key]}
+                    className={`rounded-lg px-2 py-2 text-center text-xs font-medium ${
+                      stock.lights[key]
+                        ? 'border border-red-200 bg-gradient-to-b from-red-50 to-red-100 text-red-700 shadow-sm shadow-red-200 dark:border-red-800 dark:from-red-900/40 dark:to-red-900/20 dark:text-red-300'
+                        : 'bg-gray-100 text-gray-400 dark:bg-gray-700'
+                    }`}
+                  >
+                    <div className={`text-lg ${stock.lights[key] ? 'drop-shadow-[0_0_4px_rgba(220,38,38,0.65)]' : ''}`}>
+                      {stock.lights[key] ? '●' : '○'}
+                    </div>
+                    {LIGHT_LABELS[key]}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 text-xs text-gray-500">
+                <div className="mb-1">
+                  趋势参考：现价 {stock.current_price.toFixed(2)}
+                  {' '}· MA5 {stock.details.ma5 ?? '--'}
+                  {' '}· MA10 {stock.details.ma10 ?? '--'}
+                  {' '}· MA20 {stock.details.ma20 ?? '--'}
+                  {' '}· DIF {stock.details.macd_dif ?? '--'} / DEA {stock.details.macd_dea ?? '--'}
+                </div>
+                RSI {stock.details.rsi14 ?? '--'} · 5日涨幅 {stock.details.return_5d ?? '--'}%
+                {' '}· 预计量比 {stock.details.projected_volume_ratio ?? '--'}
+                {' '}· {stock.details.main_net_inflow_5d_wan != null
+                  ? `5日主力净流入 ${stock.details.main_net_inflow_5d_wan} 万`
+                  : stock.details.main_net_inflow_today_wan != null
+                    ? `当日主力净流入 ${stock.details.main_net_inflow_today_wan} 万（降级）`
+                    : '主力资金暂缺'}
+              </div>
+              {stock.risk_flags.length > 0 && (
+                <p className="mt-2 text-xs text-amber-600">注意：{stock.risk_flags.join('；')}</p>
+              )}
+              <div className="mt-4 flex gap-2">
+                <Link to={`/stock/${stock.code}`} className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white">详情</Link>
+                <button
+                  onClick={() => void onAddWatchlist(stock.code, stock.name)}
+                  disabled={addingMap[stock.code] || addedMap[stock.code]}
+                  className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                >
+                  {addedMap[stock.code] ? '已加入' : addingMap[stock.code] ? '加入中' : '加入自选'}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      <SignalHistory history={history} />
+    </div>
+  );
+}
+
+function SignalHistory({ history }: { history: FourLightsRun[] }) {
+  if (history.length === 0) return null;
+  return (
+    <section className="mt-6 text-left">
+      <h3 className="mb-3 text-base font-semibold text-gray-900 dark:text-white">历史信号验证</h3>
+      <div className="space-y-2">
+        {history.slice(0, 4).map((run) => (
+          <div key={run.run_id} className="rounded-lg border border-gray-200 bg-white p-3 text-sm dark:border-gray-700 dark:bg-gray-800">
+            <div className="mb-2 flex justify-between text-gray-500">
+              <span>{new Date(run.created_at).toLocaleString('zh-CN')} · {run.session === 'morning' ? '早盘' : '尾盘'}</span>
+              <span>{run.validation_status === 'validated' ? '已验证' : '待验证'}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {run.stocks.map((stock) => (
+                <span key={stock.code} className="rounded bg-gray-100 px-2 py-1 dark:bg-gray-700">
+                  {stock.name} {stock.validation_return_pct == null
+                    ? '待验证'
+                    : `${stock.validation_return_pct >= 0 ? '+' : ''}${stock.validation_return_pct.toFixed(2)}%`}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { stockAPI, type Position, type RiskLevel, type TradingProfile, type TradingStyle } from '../services/api';
+import { getDefaultAgentIds } from '../utils/agentSelection';
 
 const styleOptions: Array<{ value: TradingStyle; label: string; detail: string }> = [
   { value: 'ultra_short', label: '超短线', detail: '盘中至2日' },
@@ -35,6 +36,7 @@ export default function PortfolioPage() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [analyzingAll, setAnalyzingAll] = useState(false);
   const [error, setError] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -104,10 +106,27 @@ export default function PortfolioPage() {
     }
     setError('');
     try {
-      const res = await stockAPI.startDebateJob(position.code, agents.map((agent) => agent.id), 1, 1);
+      const res = await stockAPI.startDebateJob(position.code, getDefaultAgentIds(agents), 1, 1);
       navigate(`/ai-debate?code=${position.code}&job_id=${res.job_id}&ar=1&dr=1`);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动分析失败');
+    }
+  };
+
+  const startPortfolioAnalysis = async () => {
+    if (agents.length < 2) {
+      setError('至少需要启用2个 Agent 才能启动整体分析');
+      return;
+    }
+    setAnalyzingAll(true);
+    setError('');
+    try {
+      const res = await stockAPI.startPortfolioAnalysis(getDefaultAgentIds(agents));
+      navigate(`/ai-debate?job_id=${res.job_id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动整体持仓分析失败');
+    } finally {
+      setAnalyzingAll(false);
     }
   };
 
@@ -130,11 +149,20 @@ export default function PortfolioPage() {
 
   return (
     <div className="space-y-6 px-4 sm:px-0">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">持仓管理</h1>
-        <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-          持仓成本、今日可卖数量和交易风格会自动注入 AI 分析。
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">持仓管理</h1>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            持仓成本、今日可卖数量和交易风格会自动注入 AI 分析。
+          </p>
+        </div>
+        <button
+          onClick={startPortfolioAnalysis}
+          disabled={analyzingAll || positions.length === 0}
+          className="rounded-lg bg-gradient-to-r from-red-600 to-purple-600 px-5 py-3 font-semibold text-white shadow hover:from-red-700 hover:to-purple-700 disabled:opacity-50"
+        >
+          {analyzingAll ? '正在启动...' : '一键分析全部持仓'}
+        </button>
       </div>
 
       {error && (
@@ -143,10 +171,12 @@ export default function PortfolioPage() {
         </div>
       )}
 
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
         <Summary label="持仓数量" value={`${summary.position_count} 只`} />
-        <Summary label="持仓成本" value={`¥${money(summary.total_cost)}`} />
+        <Summary label="估算总资产" value={`¥${money(summary.total_assets)}`} />
+        <Summary label="可用现金" value={`¥${money(summary.available_cash)}`} />
         <Summary label="当前市值" value={`¥${money(summary.total_market_value)}`} />
+        <Summary label="总仓位" value={`${money(summary.total_position_pct)}%`} />
         <Summary
           label="浮动盈亏"
           value={`${totalUp ? '+' : ''}¥${money(summary.total_profit)} (${money(summary.total_profit_pct)}%)`}
@@ -170,6 +200,17 @@ export default function PortfolioPage() {
           </label>
         </div>
         <div className="grid gap-4 md:grid-cols-3">
+          <label className="text-sm text-gray-600 dark:text-gray-300">
+            可用现金（元）
+            <input
+              type="number"
+              defaultValue={profile.available_cash}
+              min={0}
+              step="0.01"
+              onBlur={(e) => saveProfile({ available_cash: Number(e.target.value) })}
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+            />
+          </label>
           <label className="text-sm text-gray-600 dark:text-gray-300">
             操作风格
             <select
@@ -205,7 +246,21 @@ export default function PortfolioPage() {
               className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
             />
           </label>
+          <label className="text-sm text-gray-600 dark:text-gray-300">
+            总仓位上限（%）
+            <input
+              type="number"
+              defaultValue={profile.max_total_position_pct}
+              min={0}
+              max={100}
+              onBlur={(e) => saveProfile({ max_total_position_pct: Number(e.target.value) })}
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+            />
+          </label>
         </div>
+        <p className="mt-3 text-xs text-gray-500">
+          当前最多还可用于新开仓 ¥{money(summary.available_for_new_position)}；AI 会同时考虑现金、总仓位和单票上限。
+        </p>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
@@ -275,9 +330,10 @@ export default function PortfolioPage() {
                   <div className="text-sm">{up ? '+' : ''}{money(position.profit)} / {money(position.profit_pct)}%</div>
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 text-sm text-gray-600 dark:text-gray-300 sm:grid-cols-4">
+              <div className="mt-4 grid gap-3 text-sm text-gray-600 dark:text-gray-300 sm:grid-cols-5">
                 <div>成本 <strong>{money(position.avg_cost)}</strong></div>
                 <div>市值 <strong>{money(position.market_value)}</strong></div>
+                <div>仓位 <strong>{money(position.position_pct)}%</strong></div>
                 <div>目标价 <strong>{money(position.target_price)}</strong></div>
                 <div>止损价 <strong>{money(position.stop_loss_price)}</strong></div>
               </div>

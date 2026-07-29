@@ -49,6 +49,7 @@ export interface TradingProfile {
   max_total_position_pct: number;
   default_stop_loss_pct: number;
   default_take_profit_pct: number;
+  available_cash: number;
   allow_intraday_t: boolean;
   notes: string;
   updated_at?: string | null;
@@ -72,6 +73,7 @@ export interface Position {
   cost_value: number;
   profit?: number | null;
   profit_pct?: number | null;
+  position_pct?: number | null;
   updated_at?: string | null;
 }
 
@@ -84,7 +86,66 @@ export interface Portfolio {
     total_market_value?: number | null;
     total_profit?: number | null;
     total_profit_pct?: number | null;
+    market_data_complete: boolean;
+    available_cash: number;
+    total_assets: number;
+    total_position_pct: number;
+    remaining_position_capacity: number;
+    available_for_new_position: number;
   };
+}
+
+export interface FourLightsCandidate {
+  code: string;
+  name: string;
+  current_price: number;
+  change_percent: number;
+  amount: number;
+  turnover_rate: number;
+  score: number;
+  rank: number;
+  light_count: number;
+  actionable: boolean;
+  lights: Record<'trend' | 'momentum' | 'volume' | 'capital', boolean>;
+  details: Record<string, number | string | null>;
+  score_reasons: string[];
+  risk_flags: string[];
+}
+
+export interface FourLightsScan {
+  run_id: string;
+  strategy: 'four_lights';
+  description: string;
+  strategy_style: 'short_ultra';
+  holding_horizon: string;
+  session: 'morning' | 'afternoon';
+  scan_time: string;
+  validation_target: string;
+  universe_count: number;
+  preselected_count: number;
+  count: number;
+  actionable_count: number;
+  stocks: FourLightsCandidate[];
+}
+
+export interface FourLightsRun {
+  run_id: string;
+  strategy: string;
+  session: 'morning' | 'afternoon';
+  created_at: string;
+  validation_status: 'pending' | 'validated';
+  stocks: Array<{
+    code: string;
+    name: string;
+    signal_price: number;
+    score: number;
+    light_count: number;
+    lights: FourLightsCandidate['lights'];
+    validation_status: 'pending' | 'validated';
+    validation_price?: number | null;
+    validation_return_pct?: number | null;
+    validated_at?: string | null;
+  }>;
 }
 
 export interface Agent {
@@ -278,6 +339,17 @@ class StockAPI {
     return data.success;
   }
 
+  async startPortfolioAnalysis(agentIds: number[]): Promise<{ job_id: string; name: string }> {
+    const data = await this.request<{
+      success: boolean;
+      data: { job_id: string; name: string };
+    }>('/api/portfolio/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ agent_ids: agentIds }),
+    });
+    return data.data;
+  }
+
   // 配置API
   async getConfig(key: string): Promise<string | null> {
     const data = await this.request<{ success: boolean; data: Record<string, string> }>(`/api/config/${key}`);
@@ -388,7 +460,8 @@ class StockAPI {
     codes: string[],
     agentIds: number[],
     analysisRounds: number = 2,
-    debateRounds: number = 1
+    debateRounds: number = 1,
+    candidateContext?: string
   ): Promise<{ job_id: string; name: string }> {
     const data = await this.request<{ success: boolean; data: { job_id: string; name: string } }>('/api/ai/debate/start_multi', {
       method: 'POST',
@@ -397,6 +470,7 @@ class StockAPI {
         agent_ids: agentIds,
         analysis_rounds: analysisRounds,
         debate_rounds: debateRounds,
+        candidate_context: candidateContext,
       }),
     });
     return data.data;
@@ -404,6 +478,21 @@ class StockAPI {
 
   async getStrongStocks(limitTime: string): Promise<any> {
     return this.request(`/api/strategy/strong_stocks?limit_time=${encodeURIComponent(limitTime)}`);
+  }
+
+  async scanFourLights(session: 'auto' | 'morning' | 'afternoon' = 'auto'): Promise<FourLightsScan> {
+    const data = await this.request<{ success: boolean; data: FourLightsScan }>('/api/strategy/four_lights/scan', {
+      method: 'POST',
+      body: JSON.stringify({ session, top_n: 5 }),
+    });
+    return data.data;
+  }
+
+  async getFourLightsHistory(limit = 10): Promise<FourLightsRun[]> {
+    const data = await this.request<{ success: boolean; data: FourLightsRun[] }>(
+      `/api/strategy/four_lights/history?limit=${limit}&validate=true`
+    );
+    return data.data;
   }
 
   async stopDebateJob(jobId: string): Promise<boolean> {

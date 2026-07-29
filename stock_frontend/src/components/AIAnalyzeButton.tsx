@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { stockAPI } from '../services/api';
 import type { Agent } from '../services/api';
+import { getDefaultAgentIds } from '../utils/agentSelection';
 
 interface AIAnalyzeButtonProps {
   code: string;
@@ -23,10 +24,10 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
     queryFn: () => stockAPI.getAgents(true),
   });
 
-  // Only default to select-all when modal first opens, so "clear" is not overwritten by useEffect
+  // 弹窗首次打开时默认选择5个互补核心角色，用户仍可继续增选。
   useEffect(() => {
     if (showModal && !prevShowModalRef.current && agents && agents.length > 0) {
-      setSelectedAgentIds(agents.map((agent) => agent.id));
+      setSelectedAgentIds(getDefaultAgentIds(agents));
     }
     prevShowModalRef.current = showModal;
   }, [showModal, agents]);
@@ -144,10 +145,16 @@ export default function AIAnalyzeButton({ code, className = '' }: AIAnalyzeButto
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      选择参与辩论的Agent（至少2个）
+                      选择参与辩论的Agent（默认核心5个，可继续增选）
                     </label>
                     {agents && agents.length > 0 && (
                       <div className="flex gap-2">
+                        <button
+                          onClick={() => setSelectedAgentIds(getDefaultAgentIds(agents))}
+                          className="text-xs px-2 py-1 bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded"
+                        >
+                          核心5个
+                        </button>
                         <button
                           onClick={() => setSelectedAgentIds(agents.map((agent) => agent.id))}
                           className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded"

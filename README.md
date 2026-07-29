@@ -1,166 +1,235 @@
-# A-tock Trading - 基于AI多Agent协同的A股交易分析系统
-# AI-powered multi-agent trading analysis system for A-share market
+# A-Stock Trading
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![React](https://img.shields.io/badge/React-18.0+-61DAFB.svg)](https://reactjs.org/)
-[![License](https://img.shields.io/badge/License-Non--Commercial-red.svg)](LICENSE)
+[English](README.md) | [简体中文](README.zh-CN.md)
 
----
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![React](https://img.shields.io/badge/React-18%2B-61DAFB.svg)](https://react.dev/)
+![License](https://img.shields.io/badge/License-Non--Commercial-red.svg)
 
-## 📖 项目简介
+An AI-powered, multi-agent research and trading-assistance system built for the
+China A-share market. It combines public market data, quantitative screening,
+portfolio context, and LLM debate to produce practical account-level action
+plans.
 
-本项目旨在将经典的 **TradingAgents** 多智能体协同辩论架构落地于 **A股市场**。系统通过融合互联网公开数据源，配合大语言模型（LLM）的深度分析能力，为投资者提供多维度、专业化的决策辅助，是探索 LLM 在金融实战场景应用的实验项目。
+> [!WARNING]
+> This project is for research and personal learning only. Its output is not
+> investment advice. Market data may be delayed or unavailable, and all trading
+> decisions and risks remain with the user. Do not expose the application
+> directly to the public internet without adding authentication and rate limits.
 
-### ⚠️ 重要提醒与风险声明
-1. **仅供学习交流**：本项目代码仅用于学术研究与技术交流，**严禁用于任何商业用途**。
-2. **非投资建议**：系统生成的所有分析结果、交易建议均基于特定算法 and 历史数据，**不构成任何投资建议**。
-3. **风险自担**：股市有风险，投资需谨慎。用户依据本项目信息进行的任何交易行为，风险由用户自行承担。
-4. **安全提示**：建议将系统部署在**私有局域网环境**中使用。本项目未针对公网环境做任何防攻击或访问限制，请勿直接暴露在公网。
+## Product Preview
 
-### 💡 为什么做这个项目？
-GitHub 上已有若干优秀的 Trading Agent 项目，但往往需要配合数个收费的高端数据接口（如 Tushare 积分、付费 API 等）才能完整运行。
+![Four Lights strategy with A-share red signals](docs/images/four-lights-strategy.png)
 
-本项目通过深度融合互联网公开信息，实现了：
-- **零门槛数据获取**：无需订阅昂贵的金融数据服务即可获取实时行情、深度资金流及舆情。
-- **全链路闭环**：提供开箱即用的现代化 Web 界面，从底层数据采集、技术指标计算到 AI 协同辩论及可视化报告输出。
+## Highlights
 
----
+- **Multi-agent debate** — technical, capital-flow, fundamental, sentiment,
+  industry, bullish, and bearish agents analyze the same evidence before an
+  operator produces the final report.
+- **Two stock-selection workflows** — keeps the early-limit-up strong-stock
+  scanner and adds an independent market-wide Four Lights strategy.
+- **Portfolio intelligence** — stores cash, risk limits, trading style, cost,
+  available quantity, targets, stops, and holding thesis.
+- **One-click portfolio analysis** — combines account exposure, every holding's
+  trend, profit/loss, market breadth, major indices, and market sentiment into
+  one prioritized action plan.
+- **Action-oriented output** — supports explicit buy, sell, hold, position
+  adjustment, intraday T-trading, stop-loss, take-profit, and `NO TRADE`
+  decisions.
+- **Signal tracking** — persists strategy snapshots and validates later returns
+  for morning-to-afternoon or afternoon-to-next-session review.
+- **A-share data pipeline** — real-time quotes, intraday and daily K-lines,
+  technical indicators, capital flow, fundamentals, industry comparison, news,
+  and community sentiment.
+- **Multiple LLM providers** — OpenAI, DeepSeek, Qwen, Gemini, SiliconFlow, and
+  Grok-compatible configuration.
+- **Feishu integration** — a self-built Feishu bot can trigger the complete
+  strategy-to-debate pipeline by command.
 
-## 🧠 系统逻辑：多专家协同辩论机制
+## Four Lights Strategy
 
-系统核心模拟了专业投研团队的工作流，通过多个具有独立视角的 **AI 专家（Agents）** 共同探讨一只股票。
+The strategy scans liquid A-shares, preselects up to 30 candidates, and ranks
+them by four independent signals. A stock is marked actionable when at least
+three lights are on. The intended holding horizon is **1–5 trading days**.
 
-### 专家角色分工
-![Agents](image/agents.png)
-- **技术分析专家**：深度解析 K 线形态、成交量及各类量化指标趋势。
-- **资金流专家**：监控主力动向、超大单/大单净流入及实时资金异动。
-- **基本面专家**：评估估值水平（PE/PB）、盈利能力（ROE）及财务健康度。
-- **舆情分析专家**：爬取并分析股吧、新闻中的市场情绪与热点事件。
-- **行业对比专家**：分析个股在所属行业的排名、相对表现及头部联动性。
-- **看多/看空专家**：分别扮演“魔鬼代言人”，从极端乐观和极端悲观视角寻找逻辑。
+### Trend light
 
-### 辩论与决策流程
-1. **独立思考阶段**：各专家基于所有原始数据，从自身专业视角进行 1-3 轮独立分析。
-2. **交叉辩论阶段**：各专家阅读其他专家的分析报告，提出质疑或修正建议，进行 1-3 轮博弈。
-3. **决策生成阶段**：由“资深操作员（Operator）”汇总所有辩论记录，识别共识与分歧，最终提炼出结构化的深度研究报告。
+The trend light turns on only when all of the following are true:
 
-### 多选一决策模式
-当用户同时选择多只股票时，系统会进入“多选一”分析流程，专家在相同数据背景下进行对比式研究，最终给出明确的买入选择建议。  
-模式强度支持三档，可与单股分析一致：
-- **快速模式（默认）**：思考 1 轮 / 辩论 1 轮  
-- **均衡模式**：思考 2 轮 / 辩论 1 轮  
-- **深入模式**：思考 3 轮 / 辩论 2 轮  
+- current price is above MA5;
+- `MA5 > MA10 > MA20`, forming a strict bullish moving-average alignment;
+- MACD DIF is greater than or equal to MACD DEA.
 
----
+This is deliberately strict. A strong rebound can pass momentum and volume
+checks while the trend light remains off until MA10 rises above MA20. For
+example, a candidate with `MA5 > MA20 > MA10` is improving, but has not yet
+formed a fully confirmed bullish alignment.
 
-## ✨ 系统功能展示
+### Momentum light
 
-### 📊 数据可视化与管理
-| 首页大盘与任务 | 实时行情与 K 线 | 资金流与行业对比 |
-| :---: | :---: | :---: |
-| ![home](image/home.png) | ![info1](image/information1.png) | ![info2](image/information2.png) |
+- RSI(14) is between 50 and 75;
+- five-session return is above 0% and no more than 18%;
+- current-session change is between -1.5% and 6%.
 
-| 舆情分析 (股吧/新闻) | 
-| :---: |
-| ![info3](image/information3.png) |
+### Volume light
 
-### 🤖 AI 配置与多智能体辩论
-| AI 服务配置 | 专家思考过程 | 最终研究报告 |
-| :---: | :---: | :---: |
-| ![config](image/config.png) | ![chat1](image/chat1.png) | ![result1](image/result1.png) |
+- turnover amount is at least CNY 300 million;
+- turnover rate is between 2% and 15%;
+- projected volume ratio is between 1.1 and 3.5.
 
-| 多模型交流细节 | 辩论详情 | 报告导出 |
-| :---: | :---: | :---: |
-| ![chat2](image/chat2.png) | ![chat3](image/chat3.png) | ![result2](image/result2.png) |
+### Capital light
 
----
+- preferred rule: five-session main capital flow is positive with at least
+  three positive sessions;
+- fallback rule: when five-session history is unavailable, today's main inflow
+  must be positive and its ratio must be at least 3%.
 
-## 📅 Todo List
+Capital-flow retrieval uses three layers: Eastmoney history first, optional
+Tushare history when `TUSHARE_TOKEN` is configured, and local daily snapshots as
+a long-term fallback. Local data is labeled as five-session data only after five
+distinct trading sessions have been accumulated.
 
-### ✅ 已完成功能
-- [x] **高频行情采集 API**：深度集成多方互联网公开接口，获取秒级实时行情、分时数据、1/5/30/日线 K 线数据。
-- [x] **深度资金流向监控**：实现主力资金净流入、超大单/大单/中单/小单分类统计，以及近 5/10/20 日历史资金轨迹分析。
-- [x] **全量基本面透视**：自动抓取市盈率(PE)、市净率(PB)、净资产收益率(ROE)、每股收益(EPS)及公司营收、利润增长率。
-- [x] **行业竞争力分析**：获取个股所属行业分类、行业内排名、行业平均涨跌幅及同行业领涨龙头对标。
-- [x] **互联网舆情分析引擎**：实时监测财经社区（如股吧）热门帖子、用户评论，抓取官方即时资讯与公告。
-- [x] **专业量化指标库**：自动计算 MA, EMA, MACD, RSI, KDJ, BOLL, OBV, WR 等 20+ 核心技术分析指标。
-- [x] **全平台 AI 模型集成**：支持 OpenAI, DeepSeek, SiliconFlow (硅基流动), 通义千问 (Qwen), Google Gemini 等主流大模型。
-- [x] **TradingAgents 协同架构**：实现多智能体并行分析、多轮交叉辩论、专家角色自由定制（看多/看空/技术派等）。
-- [x] **响应式现代化 UI**：基于 React 18 + Tailwind CSS 打造专业金融仪表盘，完美适配不同尺寸屏幕。
-- [x] **交互式 K 线分析系统**：集成高性能轻量化图表，支持多周期一键切换、均线/技术指标叠加显示。
-- [x] **异步任务与持久化管理**：集成 SQLite 存储辩论任务状态、各专家详细思考步骤，支持后台长时运行。
+## Portfolio-Level Analysis
 
-### 🚀 计划中
-- [ ] **自动化预警系统**：根据专家达成共识后的技术面/资金面异动发送实时通知。
-- [ ] **更多深度数据源**：集成研报精华总结、宏观经济指标及大宗商品联动数据。
-- [ ] **Agent 进化机制**：引入 RAG（检索增强生成）技术，实时检索历史分析记录以优化决策稳定性。
+The **Analyze Entire Portfolio** action uses the default five complementary
+agents and provides:
 
----
+- market-regime and breadth assessment;
+- total assets, cash, exposure, capacity, and concentration checks;
+- per-holding trend, profit/loss, available quantity, and thesis review;
+- prioritized actions with quantity or percentage adjustments;
+- entry/exit triggers, stop-loss, take-profit, validity period, and T-trading
+  plan;
+- a cash and total-position plan consistent with the configured risk limits.
 
-## 🚀 快速启动 (Quick Start)
+Held stocks are automatically synchronized to the watchlist.
 
-### 1. 后端部署 (Python Flask)
+## How It Works
+
+1. Collect market, technical, capital-flow, fundamental, and sentiment data.
+2. Inject trading profile and live portfolio context into every relevant prompt.
+3. Run selected agents in parallel for independent analysis.
+4. Let agents challenge or refine other opinions during debate rounds.
+5. Use an operator model to reconcile evidence, constraints, and disagreements.
+6. Persist steps and the final Markdown report for polling and export.
+
+## Project Structure
+
+```text
+.
+├── api_server.py                  # Flask entry point
+├── api_routes.py                  # Market, strategy, and AI task APIs
+├── portfolio_routes.py            # Trading profile and position APIs
+├── four_lights_strategy.py        # Four Lights market-wide scanner
+├── strategy_scorer.py             # Strong-stock quantitative ranking
+├── strategy_signal_service.py     # Signal persistence and validation
+├── market_context_service.py      # Market sentiment snapshot
+├── pipeline_feishu.py             # Feishu-triggered strategy pipeline
+├── data_fetchers.py               # Public market-data adapters
+├── technical_indicators.py        # Technical indicator calculations
+├── models.py                      # SQLite models and migrations
+├── docs/
+│   └── feishu_setup.md
+└── stock_frontend/                # React + TypeScript + Vite frontend
+```
+
+## Quick Start
+
+### 1. Backend
+
 ```bash
-# 克隆项目
 git clone https://github.com/DLWangSan/a-stock-trading.git
 cd a-stock-trading
 
-# 安装依赖
 pip install -r requirements.txt
-
-# 启动服务
 python api_server.py
 ```
-*后端默认运行在 `http://localhost:5010`；可用环境变量 `PORT` 覆盖。*
 
-#### 策略流水线 + 飞书（指令触发，非定时）
+The backend runs at `http://localhost:5010` by default. Set `PORT` to override
+the port.
 
-详细图文步骤见 **[docs/feishu_setup.md](docs/feishu_setup.md)**。
+### 2. Frontend
 
-1. **HTTP 串行接口**（脚本 / 其它服务调用）：`POST /api/pipeline/strategy_to_multi_debate`
-   - 流程：`GET /api/strategy/strong_stocks` → 取全部强势股代码 → `POST /api/ai/debate/start_multi`（启用中的全部 Agent）。
-   - 请求头必须带：`X-Pipeline-Token: <与服务器环境变量 PIPELINE_TRIGGER_TOKEN 一致>`（或 `Authorization: Bearer <token>`）。
-   - 可选 JSON body：`limit_time`、`agent_ids`、`analysis_rounds`、`debate_rounds`、`override_api_key`。
-   - 若设置环境变量 `FEISHU_WEBHOOK_URL`（群机器人 Webhook），成功启动任务后会向群内发一条简要通知。
-
-2. **飞书机器人 @ 指令**（需在飞书开放平台创建应用并订阅事件，请求 URL 填公网可访问的 `https://你的域名/api/feishu/events`）：
-   - 环境变量：`FEISHU_VERIFICATION_TOKEN`（与事件订阅里「Verification Token」一致）；可选 `PIPELINE_KEYWORD`（默认消息里含 **策略辩论** 四字即触发）；同上可选 `FEISHU_WEBHOOK_URL` 推送结果摘要。
-   - 用户在群里发包含关键词的消息后，后台异步启动上述流水线；辩论进度与报告仍通过现有接口 `GET /api/ai/debate/status/<job_id>` 查询。
-
-*移动端 App 默认后端地址请在 App 内自行改为 `http://<电脑IP>:5010`，与仓库默认端口一致。*
-
-#### Windows 下提示「访问套接字」/绑定端口失败？
-
-多为系统 **TCP 端口排除范围** 或端口占用，可 `netsh interface ipv4 show excludedportrange protocol=tcp` / `netstat -ano | findstr :<端口>` 自查，并改用 `set PORT=其它端口`。
-
-### 2. 前端部署 (React + Vite)
 ```bash
 cd stock_frontend
-
-# 安装依赖
 npm install
-
-# 启动开发服务器
 npm run dev
 ```
-*前端默认运行在 `http://localhost:5173`*
 
----
+The Vite development server runs at `http://localhost:5173`.
 
-## ⭐ Star History
+### 3. AI Configuration
 
+Open **Settings** in the web application and configure at least one supported
+provider, API key, and model. Enable at least two agents before starting a
+debate. The default workflow selects five complementary core agents; users can
+select more agents for deeper analysis.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=DLWangSan/a-stock-trading&type=date&legend=bottom-right)](https://www.star-history.com/#DLWangSan/a-stock-trading&type=date&legend=bottom-right)
+Optional environment variable:
 
----
+```env
+TUSHARE_TOKEN=your_tushare_token
+```
 
-## ⚖️ 免责声明与协议
+The application works without this token. It only adds a secondary historical
+capital-flow source when the account has permission for Tushare's `moneyflow`
+API.
 
-1. **投资风险**：本软件仅用于数据分析参考，不对任何投资结果负责。股市有风险，入市需谨慎。
-2. **版权声明**：本项目采用 **Non-Commercial License**。
-    - 允许：个人学习、技术研究、非盈利性分享。
-    - **禁止：任何形式的商业售卖、封装付费服务或用于盈利性自媒体引流。**
-3. **数据说明**：系统通过互联网公开接口融合多方信息，数据版权归原提供平台所有。
+## Feishu Command Pipeline
 
----
-*If you find this project helpful, please give us a ⭐!*
+The backend supports a single command-triggered workflow:
+
+1. execute a stock-selection strategy;
+2. collect all selected stocks and market data;
+3. run a multi-stock agent debate;
+4. persist every analysis/debate step and final report;
+5. optionally send status or result notifications to Feishu.
+
+Main endpoints:
+
+- `POST /api/pipeline/strategy_to_multi_debate`
+- `POST /api/feishu/events`
+- `GET /api/ai/debate/status/<job_id>`
+
+See the complete setup guide in
+[docs/feishu_setup.md](docs/feishu_setup.md).
+
+## Key APIs
+
+- `GET /api/strategy/strong_stocks` — ranked strong-stock candidates
+- `POST /api/strategy/four_lights/scan` — execute a Four Lights scan
+- `GET /api/strategy/four_lights/history` — signal history and validation
+- `GET /api/portfolio` — account and portfolio snapshot
+- `POST /api/portfolio/analyze` — one-click account-level analysis
+- `POST /api/ai/debate/start/<code>` — single-stock debate
+- `POST /api/ai/debate/start_multi` — multi-stock comparative debate
+- `GET /api/ai/debate/status/<job_id>` — task progress, steps, and report
+
+## Data Reliability
+
+The project intentionally relies mainly on public internet endpoints, so an
+upstream provider may throttle, change, or temporarily block requests. Critical
+paths use timeouts, retries, caching, fallback sources, and explicit
+data-completeness labels. For production-grade use, connect a licensed market
+data provider and add authentication, observability, and scheduled backups.
+
+## Development Checks
+
+```bash
+# Python syntax check
+python -m compileall -q .
+
+# Frontend production build
+cd stock_frontend
+npm run build
+```
+
+## License and Disclaimer
+
+- Personal study, technical research, and non-profit sharing are allowed.
+- Commercial resale, paid repackaging, and profit-oriented redistribution are
+  prohibited.
+- Data copyrights remain with their original providers.
+- The maintainers accept no responsibility for trading losses or data errors.
+
+If this project helps you, consider giving it a star.

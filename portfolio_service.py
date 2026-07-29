@@ -5,6 +5,7 @@
 from datetime import datetime
 from typing import Optional
 
+from data_fetchers import get_realtime_data
 from models import Position, TradingProfile
 
 
@@ -57,6 +58,7 @@ def serialize_profile(profile: TradingProfile) -> dict:
         'max_total_position_pct': profile.max_total_position_pct,
         'default_stop_loss_pct': profile.default_stop_loss_pct,
         'default_take_profit_pct': profile.default_take_profit_pct,
+        'available_cash': profile.available_cash or 0,
         'allow_intraday_t': profile.allow_intraday_t,
         'notes': profile.notes or '',
         'updated_at': profile.updated_at.isoformat() if profile.updated_at else None,
@@ -95,14 +97,69 @@ def serialize_position(position: Position, realtime: Optional[dict] = None) -> d
     }
 
 
+def build_portfolio_snapshot(db) -> dict:
+    """获取含实时价格、仓位比例和账户汇总的组合快照。"""
+    profile = get_or_create_profile(db)
+    positions = db.query(Position).order_by(Position.updated_at.desc()).all()
+    rows = []
+    for position in positions:
+        try:
+            realtime = get_realtime_data(position.code)
+        except Exception:
+            realtime = None
+        rows.append(serialize_position(position, realtime))
+
+    total_cost = sum(item['cost_value'] for item in rows)
+    known_market_value = sum(
+        item['market_value'] for item in rows if item['market_value'] is not None
+    )
+    market_data_complete = all(item['market_value'] is not None for item in rows)
+    available_cash = max(0.0, profile.available_cash or 0.0)
+    total_assets = available_cash + known_market_value
+    total_profit = known_market_value - total_cost if market_data_complete else None
+    total_position_pct = (
+        known_market_value / total_assets * 100 if total_assets > 0 else 0.0
+    )
+    max_position_value = total_assets * profile.max_total_position_pct / 100
+    remaining_position_capacity = max(0.0, max_position_value - known_market_value)
+
+    for item in rows:
+        item['position_pct'] = (
+            item['market_value'] / total_assets * 100
+            if item['market_value'] is not None and total_assets > 0
+            else None
+        )
+
+    return {
+        'profile': profile,
+        'positions': rows,
+        'summary': {
+            'position_count': len(rows),
+            'total_cost': total_cost,
+            'total_market_value': known_market_value if rows else 0.0,
+            'market_data_complete': market_data_complete,
+            'total_profit': total_profit,
+            'total_profit_pct': (
+                total_profit / total_cost * 100
+                if total_profit is not None and total_cost > 0
+                else None
+            ),
+            'available_cash': available_cash,
+            'total_assets': total_assets,
+            'total_position_pct': total_position_pct,
+            'remaining_position_capacity': remaining_position_capacity,
+            'available_for_new_position': min(available_cash, remaining_position_capacity),
+        },
+    }
+
+
 def build_ai_portfolio_context(db, code: Optional[str] = None) -> str:
     """生成给 LLM 使用的确定性持仓/风格上下文。"""
-    profile = get_or_create_profile(db)
+    snapshot = build_portfolio_snapshot(db)
+    profile = snapshot['profile']
     profile_data = serialize_profile(profile)
-    query = db.query(Position)
-    if code:
-        query = query.filter(Position.code == code)
-    positions = query.order_by(Position.updated_at.desc()).all()
+    positions = snapshot['positions']
+    summary = snapshot['summary']
 
     lines = [
         '【用户交易上下文】',
@@ -113,25 +170,38 @@ def build_ai_portfolio_context(db, code: Optional[str] = None) -> str:
         f"总仓位上限: {profile.max_total_position_pct:.1f}%",
         f"默认止损/止盈: {profile.default_stop_loss_pct:.1f}% / {profile.default_take_profit_pct:.1f}%",
         f"允许日内做T: {'是' if profile.allow_intraday_t else '否'}",
+        f"可用现金: {summary['available_cash']:.2f}元",
+        f"估算总资产: {summary['total_assets']:.2f}元",
+        f"持仓市值/总仓位: {summary['total_market_value']:.2f}元 / {summary['total_position_pct']:.1f}%",
+        f"可用于新开仓: {summary['available_for_new_position']:.2f}元",
     ]
+    if not summary['market_data_complete']:
+        lines.append('注意: 部分持仓实时行情缺失，组合市值与仓位为不完整估算。')
     if profile.notes:
         lines.append(f"用户补充: {profile.notes}")
 
     if not positions:
-        lines.append('当前标的未录入持仓。请以观察/建仓建议为主，不要虚构持仓数量。')
+        lines.append('当前没有已录入持仓。请以观察/建仓建议为主，不要虚构持仓数量。')
     else:
         lines.append('当前持仓:')
-        for p in positions:
-            holding_days = (datetime.now() - p.opened_at).days if p.opened_at else None
+        for item in positions:
+            opened_at = datetime.fromisoformat(item['opened_at']) if item['opened_at'] else None
+            holding_days = (datetime.now() - opened_at).days if opened_at else None
             days_text = f'{holding_days}天' if holding_days is not None else '未知'
+            target_mark = ' [当前分析标的]' if code and item['code'] == code else ''
             lines.append(
-                f"- {p.name or p.code}({p.code}): 总持仓{p.quantity}股, "
-                f"今日可卖{p.available_quantity}股, 成本{p.avg_cost:.2f}, 持有{days_text}, "
-                f"目标价{p.target_price if p.target_price is not None else '未设'}, "
-                f"止损价{p.stop_loss_price if p.stop_loss_price is not None else '未设'}"
+                f"- {item['name']}({item['code']}){target_mark}: 总持仓{item['quantity']}股, "
+                f"今日可卖{item['available_quantity']}股, 成本{item['avg_cost']:.2f}, "
+                f"现价{item['current_price'] if item['current_price'] is not None else '缺失'}, "
+                f"浮盈亏{item['profit_pct'] if item['profit_pct'] is not None else '缺失'}%, "
+                f"仓位{item['position_pct'] if item['position_pct'] is not None else '缺失'}%, "
+                f"持有{days_text}, 目标价{item['target_price'] if item['target_price'] is not None else '未设'}, "
+                f"止损价{item['stop_loss_price'] if item['stop_loss_price'] is not None else '未设'}"
             )
-            if p.thesis:
-                lines.append(f"  持仓逻辑: {p.thesis}")
+            if item['thesis']:
+                lines.append(f"  持仓逻辑: {item['thesis']}")
+        if code and not any(item['code'] == code for item in positions):
+            lines.append(f'当前分析标的 {code} 尚未持有，应按新开仓约束计算。')
 
     lines.extend([
         '输出要求:',
