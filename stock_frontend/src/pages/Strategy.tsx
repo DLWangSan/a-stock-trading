@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { stockAPI } from '../services/api';
 import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { getDefaultAgentIds } from '../utils/agentSelection';
-import type { FourLightsCandidate, FourLightsRun, FourLightsScan } from '../services/api';
+import type { FourLightsCandidate, FourLightsRun, FourLightsScan, OvernightCandidate, OvernightScan } from '../services/api';
 
 interface StrongStock {
   code: string;
@@ -49,12 +49,15 @@ const TIME_OPTIONS = [
 ];
 
 export default function Strategy() {
-  const [activeStrategy, setActiveStrategy] = useState<'strong' | 'four_lights'>('strong');
+  const [activeStrategy, setActiveStrategy] = useState<'strong' | 'four_lights' | 'overnight'>('strong');
   const [limitTime, setLimitTime] = useState('11:30');
   const [fourLightsSession, setFourLightsSession] = useState<'auto' | 'morning' | 'afternoon'>('auto');
   const [fourLightsData, setFourLightsData] = useState<FourLightsScan | null>(null);
   const [fourLightsScanning, setFourLightsScanning] = useState(false);
   const [fourLightsError, setFourLightsError] = useState<string | null>(null);
+  const [overnightData, setOvernightData] = useState<OvernightScan | null>(null);
+  const [overnightScanning, setOvernightScanning] = useState(false);
+  const [overnightError, setOvernightError] = useState<string | null>(null);
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [showMultiModal, setShowMultiModal] = useState(false);
   const [selectedAgentIds, setSelectedAgentIds] = useState<number[]>([]);
@@ -74,8 +77,14 @@ export default function Strategy() {
 
   const { data: fourLightsHistory = [], refetch: refetchFourLightsHistory } = useQuery<FourLightsRun[]>({
     queryKey: ['four-lights-history'],
-    queryFn: () => stockAPI.getFourLightsHistory(6),
+    queryFn: () => stockAPI.getFourLightsHistory(10),
     enabled: activeStrategy === 'four_lights',
+  });
+
+  const { data: overnightHistory = [], refetch: refetchOvernightHistory } = useQuery<FourLightsRun[]>({
+    queryKey: ['overnight-history'],
+    queryFn: () => stockAPI.getOvernightHistory(10),
+    enabled: activeStrategy === 'overnight',
   });
 
   const { data: agents, isLoading: agentsLoading } = useQuery({
@@ -136,6 +145,22 @@ export default function Strategy() {
     }
   };
 
+  const handleScanOvernight = async () => {
+    setOvernightScanning(true);
+    setOvernightError(null);
+    setSelectedCodes([]);
+    try {
+      const result = await stockAPI.scanOvernight();
+      setOvernightData(result);
+      setSelectedCodes(result.stocks.map((stock) => stock.code));
+      await refetchOvernightHistory();
+    } catch (e) {
+      setOvernightError(e instanceof Error ? e.message : '隔夜策略扫描失败');
+    } finally {
+      setOvernightScanning(false);
+    }
+  };
+
   const handleAddWatchlist = async (code: string, name: string) => {
     if (addingMap[code]) return;
     setAddingMap((prev) => ({ ...prev, [code]: true }));
@@ -184,7 +209,15 @@ export default function Strategy() {
             + `点亮${Object.entries(stock.lights).filter(([, on]) => on).map(([key]) => key).join('/')}`
           ))
           .join('\n')
-        : undefined;
+        : activeStrategy === 'overnight'
+          ? overnightData?.stocks
+            .filter((stock) => selectedCodes.includes(stock.code))
+            .map((stock) => (
+              `${stock.rank}. ${stock.name}(${stock.code})：隔夜通过${stock.pass_count}/5，`
+              + `评分${stock.score}，持有周期隔夜至次日早盘，卖出计划：${stock.sell_plan}`
+            ))
+            .join('\n')
+          : undefined;
       const res = await stockAPI.startMultiSelectDebate(
         selectedCodes,
         selectedAgentIds,
@@ -206,7 +239,7 @@ export default function Strategy() {
   return (
     <div className="px-4 sm:px-6 lg:px-8">
       {/* 策略卡片 - 始终显示 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* 强势股策略 */}
         <div
           onClick={() => { setActiveStrategy('strong'); setSelectedCodes([]); }}
@@ -314,6 +347,44 @@ export default function Strategy() {
             )}
           </div>
         </div>
+
+        {/* 尾盘隔夜策略 */}
+        <div
+          onClick={() => { setActiveStrategy('overnight'); setSelectedCodes([]); }}
+          className={`cursor-pointer rounded-xl bg-gradient-to-br from-rose-500 to-orange-600 p-6 text-white shadow-lg ring-offset-2 ${
+            activeStrategy === 'overnight' ? 'ring-4 ring-rose-300' : ''
+          }`}
+        >
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold">尾盘隔夜超短</h2>
+              <p className="mt-1 text-sm text-rose-100">默认次日竞价/开盘卖出</p>
+            </div>
+            <div className="text-right">
+              <div className="text-4xl font-bold">{overnightData?.count || 0}</div>
+              <div className="text-sm text-rose-100">隔夜候选</div>
+            </div>
+          </div>
+          <div className="rounded-lg bg-white/10 p-3">
+            <div className="mb-3 flex flex-wrap gap-2 text-xs">
+              {['涨幅带', '涨停记忆', 'MA5', '量能', '流动性'].map((label) => (
+                <span key={label} className="rounded-full bg-white/20 px-2 py-1">{label}</span>
+              ))}
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); setActiveStrategy('overnight'); void handleScanOvernight(); }}
+              disabled={overnightScanning}
+              className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-60"
+            >
+              {overnightScanning ? '扫描中...' : '立即扫描并记录'}
+            </button>
+            {overnightData && (
+              <div className="mt-3 text-xs text-rose-100">
+                {overnightData.timing_note} · {overnightData.validation_target}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* 风险提示 - 始终显示 */}
@@ -329,7 +400,11 @@ export default function Strategy() {
       {/* 筛选结果标题和刷新按钮 - 始终显示 */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-          {activeStrategy === 'strong' ? '强势股筛选结果' : '四灯共振建议'}
+          {activeStrategy === 'strong'
+            ? '强势股筛选结果'
+            : activeStrategy === 'four_lights'
+              ? '四灯共振建议'
+              : '尾盘隔夜建议'}
         </h2>
         <div className="flex items-center gap-3">
           {selectedCodes.length >= 2 && (
@@ -341,14 +416,34 @@ export default function Strategy() {
             </button>
           )}
           <button
-            onClick={() => activeStrategy === 'strong' ? refetch() : handleScanFourLights()}
-            disabled={activeStrategy === 'strong' ? isFetching : fourLightsScanning}
+            onClick={() => (
+              activeStrategy === 'strong'
+                ? refetch()
+                : activeStrategy === 'four_lights'
+                  ? handleScanFourLights()
+                  : handleScanOvernight()
+            )}
+            disabled={
+              activeStrategy === 'strong'
+                ? isFetching
+                : activeStrategy === 'four_lights'
+                  ? fourLightsScanning
+                  : overnightScanning
+            }
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <svg className={`h-5 w-5 ${(activeStrategy === 'strong' ? isFetching : fourLightsScanning) ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className={`h-5 w-5 ${(
+              activeStrategy === 'strong' ? isFetching : activeStrategy === 'four_lights' ? fourLightsScanning : overnightScanning
+            ) ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            {(activeStrategy === 'strong' ? isFetching : fourLightsScanning) ? '扫描中...' : activeStrategy === 'strong' ? '刷新数据' : '重新扫描'}
+            {(
+              activeStrategy === 'strong' ? isFetching : activeStrategy === 'four_lights' ? fourLightsScanning : overnightScanning
+            )
+              ? '扫描中...'
+              : activeStrategy === 'strong'
+                ? '刷新数据'
+                : '重新扫描'}
           </button>
         </div>
       </div>
@@ -526,12 +621,24 @@ export default function Strategy() {
             </table>
           </div>
         </div>
-      )) : (
+      )) : activeStrategy === 'four_lights' ? (
         <FourLightsResults
           data={fourLightsData}
           history={fourLightsHistory}
           scanning={fourLightsScanning}
           error={fourLightsError}
+          selectedCodes={selectedCodes}
+          onToggle={toggleSelectCode}
+          onAddWatchlist={handleAddWatchlist}
+          addingMap={addingMap}
+          addedMap={addedMap}
+        />
+      ) : (
+        <OvernightResults
+          data={overnightData}
+          history={overnightHistory}
+          scanning={overnightScanning}
+          error={overnightError}
           selectedCodes={selectedCodes}
           onToggle={toggleSelectCode}
           onAddWatchlist={handleAddWatchlist}
@@ -731,7 +838,7 @@ function FourLightsResults({
       <div className="rounded-lg border border-dashed border-purple-300 bg-purple-50/50 py-14 text-center dark:border-purple-800 dark:bg-purple-900/10">
         <div className="text-lg font-medium text-purple-800 dark:text-purple-300">尚未执行四灯扫描</div>
         <p className="mt-2 text-sm text-gray-500">早盘信号在14:30后验证；尾盘信号在下一交易日验证。</p>
-        {history.length > 0 && <SignalHistory history={history} />}
+        {history.length > 0 && <SignalHistory history={history} strategy="four_lights" />}
       </div>
     );
   }
@@ -833,22 +940,228 @@ function FourLightsResults({
           ))}
         </div>
       )}
-      <SignalHistory history={history} />
+      <SignalHistory history={history} strategy="four_lights" />
     </div>
   );
 }
 
-function SignalHistory({ history }: { history: FourLightsRun[] }) {
+const OVERNIGHT_CHECK_LABELS: Record<keyof OvernightCandidate['checks'], string> = {
+  gain_band: '涨幅带',
+  liquidity: '流动性',
+  limit_memory: '涨停记忆',
+  above_ma5: '站上MA5',
+  volume_active: '量能',
+};
+
+function OvernightResults({
+  data,
+  history,
+  scanning,
+  error,
+  selectedCodes,
+  onToggle,
+  onAddWatchlist,
+  addingMap,
+  addedMap,
+}: {
+  data: OvernightScan | null;
+  history: FourLightsRun[];
+  scanning: boolean;
+  error: string | null;
+  selectedCodes: string[];
+  onToggle: (code: string) => void;
+  onAddWatchlist: (code: string, name: string) => Promise<void>;
+  addingMap: Record<string, boolean>;
+  addedMap: Record<string, boolean>;
+}) {
+  if (scanning && !data) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white p-12 dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex flex-col items-center">
+          <LoadingSpinner size="large" />
+          <p className="mt-4 text-gray-500">正在扫描尾盘隔夜候选，通常需要10至30秒...</p>
+        </div>
+      </div>
+    );
+  }
+  if (error) {
+    return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
+  }
+  if (!data) {
+    return (
+      <div className="rounded-lg border border-dashed border-rose-300 bg-rose-50/50 py-14 text-center dark:border-rose-800 dark:bg-rose-900/10">
+        <div className="text-lg font-medium text-rose-800 dark:text-rose-300">尚未执行隔夜扫描</div>
+        <p className="mt-2 text-sm text-gray-500">建议14:20后扫描；默认次日竞价或开盘卖出，下一交易日验证。</p>
+        {history.length > 0 && <SignalHistory history={history} strategy="overnight" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-200">
+        本次从 {data.universe_count} 只高流动性股票中预筛 {data.preselected_count} 只，
+        得到 {data.count} 只隔夜候选，其中 {data.actionable_count} 只达到可操作标准。
+        持有周期：{data.holding_horizon}。{data.timing_note}；{data.validation_target}。
+      </div>
+      {data.stocks.length === 0 ? (
+        <div className="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 dark:border-gray-700 dark:bg-gray-800">
+          当前没有符合隔夜条件的标的，建议空仓观望。
+        </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {data.stocks.map((stock) => (
+            <article key={stock.code} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex items-start justify-between gap-3">
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedCodes.includes(stock.code)}
+                    onChange={() => onToggle(stock.code)}
+                    className="mt-1 rounded"
+                  />
+                  <span>
+                    <span className="block text-lg font-semibold text-gray-900 dark:text-white">
+                      #{stock.rank} {stock.name} <span className="text-sm text-gray-500">{stock.code}</span>
+                      <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${
+                        stock.actionable
+                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                      }`}>
+                        {stock.actionable ? '可操作隔夜' : '观察候选'}
+                      </span>
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      ¥{stock.current_price.toFixed(2)} · {stock.change_percent >= 0 ? '+' : ''}{stock.change_percent.toFixed(2)}%
+                      {' '}· 换手 {stock.turnover_rate.toFixed(2)}%
+                      {' '}· 流通市值 {stock.details.circulating_market_cap_yi ?? '--'} 亿
+                    </span>
+                  </span>
+                </label>
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-rose-600">{stock.score.toFixed(1)}</div>
+                  <div className="text-xs text-gray-500">{stock.pass_count}/5 项</div>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-5 gap-2">
+                {(Object.keys(OVERNIGHT_CHECK_LABELS) as Array<keyof OvernightCandidate['checks']>).map((key) => (
+                  <div
+                    key={key}
+                    className={`rounded-lg px-1 py-2 text-center text-[11px] font-medium ${
+                      stock.checks[key]
+                        ? 'border border-red-200 bg-gradient-to-b from-red-50 to-red-100 text-red-700'
+                        : 'bg-gray-100 text-gray-400'
+                    }`}
+                  >
+                    <div>{stock.checks[key] ? '●' : '○'}</div>
+                    {OVERNIGHT_CHECK_LABELS[key]}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 text-xs text-gray-500">
+                MA5 {stock.details.ma5 ?? '--'} · 预计量比 {stock.details.projected_volume_ratio ?? '--'}
+                {' '}· 近5日涨停 {stock.details.recent_limit_days ?? 0} 次
+              </div>
+              <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{stock.sell_plan}</p>
+              {stock.risk_flags.length > 0 && (
+                <p className="mt-2 text-xs text-amber-600">注意：{stock.risk_flags.join('；')}</p>
+              )}
+              <div className="mt-4 flex gap-2">
+                <Link to={`/stock/${stock.code}`} className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white">详情</Link>
+                <button
+                  onClick={() => void onAddWatchlist(stock.code, stock.name)}
+                  disabled={addingMap[stock.code] || addedMap[stock.code]}
+                  className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                >
+                  {addedMap[stock.code] ? '已加入' : addingMap[stock.code] ? '加入中' : '加入自选'}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      <SignalHistory history={history} strategy="overnight" />
+    </div>
+  );
+}
+
+function SignalHistory({
+  history,
+  strategy,
+}: {
+  history: FourLightsRun[];
+  strategy: 'four_lights' | 'overnight';
+}) {
+  const queryClient = useQueryClient();
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const queryKey = strategy === 'four_lights' ? ['four-lights-history'] : ['overnight-history'];
+
+  const handleDelete = async (run: FourLightsRun) => {
+    const label = new Date(run.created_at).toLocaleString('zh-CN');
+    if (!window.confirm(`确认删除 ${label} 的整次扫描及验证记录吗？`)) return;
+    setDeletingRunId(run.run_id);
+    try {
+      if (strategy === 'four_lights') {
+        await stockAPI.deleteFourLightsHistory(run.run_id);
+      } else {
+        await stockAPI.deleteOvernightHistory(run.run_id);
+      }
+      await queryClient.invalidateQueries({ queryKey });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '删除历史记录失败');
+    } finally {
+      setDeletingRunId(null);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm('确认清空当前策略的全部历史信号与验证记录吗？此操作不可恢复。')) return;
+    setClearing(true);
+    try {
+      if (strategy === 'four_lights') {
+        await stockAPI.clearFourLightsHistory();
+      } else {
+        await stockAPI.clearOvernightHistory();
+      }
+      await queryClient.invalidateQueries({ queryKey });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '清空历史记录失败');
+    } finally {
+      setClearing(false);
+    }
+  };
+
   if (history.length === 0) return null;
   return (
     <section className="mt-6 text-left">
-      <h3 className="mb-3 text-base font-semibold text-gray-900 dark:text-white">历史信号验证</h3>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white">历史信号验证</h3>
+        <button
+          type="button"
+          onClick={() => void handleClearAll()}
+          disabled={clearing}
+          className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:hover:bg-red-900/20"
+        >
+          {clearing ? '清空中...' : '清空全部'}
+        </button>
+      </div>
       <div className="space-y-2">
-        {history.slice(0, 4).map((run) => (
+        {history.slice(0, 8).map((run) => (
           <div key={run.run_id} className="rounded-lg border border-gray-200 bg-white p-3 text-sm dark:border-gray-700 dark:bg-gray-800">
-            <div className="mb-2 flex justify-between text-gray-500">
+            <div className="mb-2 flex items-center justify-between gap-3 text-gray-500">
               <span>{new Date(run.created_at).toLocaleString('zh-CN')} · {run.session === 'morning' ? '早盘' : '尾盘'}</span>
-              <span>{run.validation_status === 'validated' ? '已验证' : '待验证'}</span>
+              <span className="flex items-center gap-3">
+                <span>{run.validation_status === 'validated' ? '已验证' : '待验证'}</span>
+                <button
+                  type="button"
+                  onClick={() => void handleDelete(run)}
+                  disabled={deletingRunId === run.run_id}
+                  className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:hover:bg-red-900/20"
+                >
+                  {deletingRunId === run.run_id ? '删除中...' : '删除'}
+                </button>
+              </span>
             </div>
             <div className="flex flex-wrap gap-2">
               {run.stocks.map((stock) => (

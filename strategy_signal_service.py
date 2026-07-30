@@ -5,7 +5,7 @@
 import json
 import uuid
 from datetime import date, datetime, time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from data_fetchers import get_realtime_data
 from models import CapitalFlowSnapshot, StrategySignal
@@ -53,23 +53,41 @@ def save_capital_flow_snapshots(db, snapshots: List[dict]) -> int:
     return saved
 
 
-def save_four_lights_run(db, result: dict) -> str:
+def save_strategy_run(db, strategy: str, result: dict) -> str:
+    """通用策略扫描快照保存，供跨时段验证。"""
     run_id = str(uuid.uuid4())
     for stock in result.get('stocks') or []:
+        lights = stock.get('lights') or stock.get('checks') or {}
+        light_count = stock.get('light_count')
+        if light_count is None:
+            light_count = int(stock.get('pass_count') or sum(1 for enabled in lights.values() if enabled))
+        details = dict(stock.get('details') or {})
+        if stock.get('sell_plan'):
+            details['sell_plan'] = stock['sell_plan']
+        if stock.get('holding_horizon'):
+            details['holding_horizon'] = stock['holding_horizon']
         db.add(StrategySignal(
             run_id=run_id,
-            strategy='four_lights',
-            scan_session=result['session'],
+            strategy=strategy,
+            scan_session=result.get('session') or 'afternoon',
             code=stock['code'],
             name=stock.get('name'),
             signal_price=float(stock['current_price']),
             score=float(stock.get('score') or 0),
-            light_count=int(stock.get('light_count') or 0),
-            lights=json.dumps(stock.get('lights') or {}, ensure_ascii=False),
-            details=json.dumps(stock.get('details') or {}, ensure_ascii=False),
+            light_count=int(light_count or 0),
+            lights=json.dumps(lights, ensure_ascii=False),
+            details=json.dumps(details, ensure_ascii=False),
         ))
     db.commit()
     return run_id
+
+
+def save_four_lights_run(db, result: dict) -> str:
+    return save_strategy_run(db, 'four_lights', result)
+
+
+def save_overnight_run(db, result: dict) -> str:
+    return save_strategy_run(db, 'overnight', result)
 
 
 def _quote_date(realtime: dict) -> date:
@@ -127,10 +145,33 @@ def validate_pending_signals(db, limit: int = 30) -> int:
     return updated
 
 
-def list_signal_runs(db, limit_runs: int = 10) -> List[dict]:
+def delete_signal_run(db, run_id: str, strategy: Optional[str] = None) -> int:
+    """删除一次策略扫描及其全部验证记录，不影响资金流快照。"""
+    query = db.query(StrategySignal).filter(StrategySignal.run_id == run_id)
+    if strategy:
+        query = query.filter(StrategySignal.strategy == strategy)
+    deleted = query.delete(synchronize_session=False)
+    if deleted:
+        db.commit()
+    return deleted
+
+
+def delete_all_signal_runs(db, strategy: str) -> int:
+    """清空某一策略的全部历史信号与验证记录。"""
+    deleted = (
+        db.query(StrategySignal)
+        .filter(StrategySignal.strategy == strategy)
+        .delete(synchronize_session=False)
+    )
+    if deleted:
+        db.commit()
+    return deleted
+
+
+def list_signal_runs(db, limit_runs: int = 10, strategy: str = 'four_lights') -> List[dict]:
     rows = (
         db.query(StrategySignal)
-        .filter(StrategySignal.strategy == 'four_lights')
+        .filter(StrategySignal.strategy == strategy)
         .order_by(StrategySignal.created_at.desc(), StrategySignal.id.asc())
         .limit(max(1, limit_runs) * 10)
         .all()

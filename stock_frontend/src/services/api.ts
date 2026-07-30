@@ -140,12 +140,51 @@ export interface FourLightsRun {
     signal_price: number;
     score: number;
     light_count: number;
-    lights: FourLightsCandidate['lights'];
+    lights: FourLightsCandidate['lights'] | Record<string, boolean>;
     validation_status: 'pending' | 'validated';
     validation_price?: number | null;
     validation_return_pct?: number | null;
     validated_at?: string | null;
   }>;
+}
+
+export interface OvernightCandidate {
+  code: string;
+  name: string;
+  current_price: number;
+  change_percent: number;
+  amount: number;
+  turnover_rate: number;
+  score: number;
+  rank: number;
+  pass_count: number;
+  actionable: boolean;
+  recommended: boolean;
+  checks: Record<'gain_band' | 'liquidity' | 'limit_memory' | 'above_ma5' | 'volume_active', boolean>;
+  details: Record<string, number | string | null>;
+  score_reasons: string[];
+  risk_flags: string[];
+  sell_plan: string;
+  holding_horizon: string;
+}
+
+export interface OvernightScan {
+  run_id: string;
+  strategy: 'overnight';
+  description: string;
+  strategy_style: 'overnight_ultra';
+  holding_horizon: string;
+  session: 'afternoon';
+  scan_time: string;
+  validation_target: string;
+  afternoon_ready: boolean;
+  timing_note: string;
+  universe_count: number;
+  preselected_count: number;
+  count: number;
+  actionable_count: number;
+  stocks: OvernightCandidate[];
+  rules: Record<string, string>;
 }
 
 export interface Agent {
@@ -493,6 +532,53 @@ class StockAPI {
       `/api/strategy/four_lights/history?limit=${limit}&validate=true`
     );
     return data.data;
+  }
+
+  async deleteFourLightsHistory(runId: string): Promise<number> {
+    const data = await this.request<{ success: boolean; data: { deleted: number } }>(
+      `/api/strategy/four_lights/history/${encodeURIComponent(runId)}`,
+      { method: 'DELETE' }
+    );
+    return data.data.deleted;
+  }
+
+  async clearFourLightsHistory(): Promise<number> {
+    const data = await this.request<{ success: boolean; data: { deleted: number } }>(
+      '/api/strategy/four_lights/history',
+      { method: 'DELETE' }
+    );
+    return data.data.deleted;
+  }
+
+  async scanOvernight(): Promise<OvernightScan> {
+    const data = await this.request<{ success: boolean; data: OvernightScan }>('/api/strategy/overnight/scan', {
+      method: 'POST',
+      body: JSON.stringify({ top_n: 5 }),
+    });
+    return data.data;
+  }
+
+  async getOvernightHistory(limit = 10): Promise<FourLightsRun[]> {
+    const data = await this.request<{ success: boolean; data: FourLightsRun[] }>(
+      `/api/strategy/overnight/history?limit=${limit}&validate=true`
+    );
+    return data.data;
+  }
+
+  async deleteOvernightHistory(runId: string): Promise<number> {
+    const data = await this.request<{ success: boolean; data: { deleted: number } }>(
+      `/api/strategy/overnight/history/${encodeURIComponent(runId)}`,
+      { method: 'DELETE' }
+    );
+    return data.data.deleted;
+  }
+
+  async clearOvernightHistory(): Promise<number> {
+    const data = await this.request<{ success: boolean; data: { deleted: number } }>(
+      '/api/strategy/overnight/history',
+      { method: 'DELETE' }
+    );
+    return data.data.deleted;
   }
 
   async stopDebateJob(jobId: string): Promise<boolean> {

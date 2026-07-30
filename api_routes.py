@@ -27,14 +27,18 @@ from db import (
 )
 from ai_service import AIService
 from four_lights_strategy import scan_four_lights
+from overnight_strategy import scan_overnight
 from market_context_service import build_market_sentiment_context
 from portfolio_service import build_ai_portfolio_context
 from strategy_scorer import rank_strong_stocks
 from strategy_signal_service import (
+    delete_all_signal_runs,
+    delete_signal_run,
     get_local_capital_flow_map,
     list_signal_runs,
     save_capital_flow_snapshots,
     save_four_lights_run,
+    save_overnight_run,
     validate_pending_signals,
 )
 from pipeline_feishu import (
@@ -76,7 +80,9 @@ def register_routes(app):
                 '/api/sentiment/all/<code>': '获取完整舆情数据（新闻+帖子），参数: ?days=7&latest=10&hot=10',
                 '/api/strategy/strong_stocks': '获取强势股（前两个交易日10:30前涨停，当前未涨停）',
                 '/api/strategy/four_lights/scan': 'POST 全市场四灯共振扫描并保存信号',
-                '/api/strategy/four_lights/history': 'GET 四灯信号历史及跨时段验证',
+                '/api/strategy/four_lights/history': 'GET 四灯信号历史及跨时段验证；DELETE 清空',
+                '/api/strategy/overnight/scan': 'POST 尾盘隔夜超短扫描并保存信号',
+                '/api/strategy/overnight/history': 'GET 隔夜信号历史及验证；DELETE 清空',
                 '/api/watchlist': '自选股管理，GET获取列表，POST添加',
                 '/api/watchlist/<code>': '自选股管理，DELETE删除',
                 '/api/config': '配置管理，GET获取所有配置，POST设置配置',
@@ -1990,21 +1996,88 @@ def register_routes(app):
         finally:
             db.close()
 
-    @app.route('/api/strategy/four_lights/history', methods=['GET'])
+    @app.route('/api/strategy/four_lights/history', methods=['GET', 'DELETE'])
     def four_lights_history_api():
-        """读取历史信号；到达验证时点时自动记录当前收益。"""
+        """读取或清空四灯历史信号；到达验证时点时自动记录当前收益。"""
         db = SessionLocal()
         try:
+            if request.method == 'DELETE':
+                deleted = delete_all_signal_runs(db, 'four_lights')
+                return jsonify({'success': True, 'data': {'deleted': deleted}})
             if request.args.get('validate', 'true').lower() in ('1', 'true', 'yes'):
                 validate_pending_signals(db)
             limit = max(1, min(int(request.args.get('limit', 10)), 30))
             return jsonify({
                 'success': True,
-                'data': list_signal_runs(db, limit_runs=limit),
+                'data': list_signal_runs(db, limit_runs=limit, strategy='four_lights'),
             })
         finally:
             db.close()
-    
+
+    @app.route('/api/strategy/four_lights/history/<run_id>', methods=['DELETE'])
+    def delete_four_lights_history_api(run_id):
+        """按扫描批次删除四灯信号与验证记录。"""
+        db = SessionLocal()
+        try:
+            deleted = delete_signal_run(db, run_id, strategy='four_lights')
+            if not deleted:
+                return jsonify({'success': False, 'error': '历史记录不存在'}), 404
+            return jsonify({'success': True, 'data': {'deleted': deleted}})
+        except Exception as exc:
+            db.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 500
+        finally:
+            db.close()
+
+    @app.route('/api/strategy/overnight/scan', methods=['POST'])
+    def scan_overnight_api():
+        """扫描尾盘隔夜超短候选，默认次日卖出并保存验证快照。"""
+        db = SessionLocal()
+        try:
+            body = request.get_json(silent=True) or {}
+            top_n = max(2, min(int(body.get('top_n', 5)), 10))
+            result = scan_overnight(top_n=top_n)
+            result['run_id'] = save_overnight_run(db, result)
+            result['validation_target'] = '下一交易日开盘后验证'
+            return jsonify({'success': True, 'data': result})
+        except Exception as exc:
+            return jsonify({'success': False, 'error': f'隔夜策略扫描失败: {str(exc)}'}), 500
+        finally:
+            db.close()
+
+    @app.route('/api/strategy/overnight/history', methods=['GET', 'DELETE'])
+    def overnight_history_api():
+        """读取或清空隔夜策略历史信号。"""
+        db = SessionLocal()
+        try:
+            if request.method == 'DELETE':
+                deleted = delete_all_signal_runs(db, 'overnight')
+                return jsonify({'success': True, 'data': {'deleted': deleted}})
+            if request.args.get('validate', 'true').lower() in ('1', 'true', 'yes'):
+                validate_pending_signals(db)
+            limit = max(1, min(int(request.args.get('limit', 10)), 30))
+            return jsonify({
+                'success': True,
+                'data': list_signal_runs(db, limit_runs=limit, strategy='overnight'),
+            })
+        finally:
+            db.close()
+
+    @app.route('/api/strategy/overnight/history/<run_id>', methods=['DELETE'])
+    def delete_overnight_history_api(run_id):
+        """按扫描批次删除隔夜信号与验证记录。"""
+        db = SessionLocal()
+        try:
+            deleted = delete_signal_run(db, run_id, strategy='overnight')
+            if not deleted:
+                return jsonify({'success': False, 'error': '历史记录不存在'}), 404
+            return jsonify({'success': True, 'data': {'deleted': deleted}})
+        except Exception as exc:
+            db.rollback()
+            return jsonify({'success': False, 'error': str(exc)}), 500
+        finally:
+            db.close()
+
     @app.route('/api/strategy/strong_stocks')
     def get_strong_stocks():
         """获取强势股（前两个交易日指定时间前涨停，当前未涨停）"""
