@@ -378,6 +378,57 @@ class StockAPI {
     return data.success;
   }
 
+  async sellPosition(
+    id: number,
+    quantity: number,
+    price: number,
+  ): Promise<{
+    deleted: boolean;
+    position: Position | null;
+    trade: {
+      code: string;
+      name: string;
+      quantity: number;
+      price: number;
+      gross_amount: number;
+      fee_rate: number;
+      fee_min: number;
+      fee: number;
+      net_amount: number;
+      cost_basis: number;
+      realized_pnl: number;
+      remaining_quantity: number;
+      available_cash: number;
+    };
+  }> {
+    const data = await this.request<{
+      success: boolean;
+      data: {
+        deleted: boolean;
+        position: Position | null;
+        trade: {
+          code: string;
+          name: string;
+          quantity: number;
+          price: number;
+          gross_amount: number;
+          fee_rate: number;
+          fee_min: number;
+          fee: number;
+          net_amount: number;
+          cost_basis: number;
+          realized_pnl: number;
+          remaining_quantity: number;
+          available_cash: number;
+        };
+      };
+    }>(`/api/portfolio/positions/${id}/sell`, {
+      method: 'POST',
+      body: JSON.stringify({ quantity, price }),
+    });
+    return data.data;
+  }
+
   async startPortfolioAnalysis(agentIds: number[]): Promise<{ job_id: string; name: string }> {
     const data = await this.request<{
       success: boolean;
@@ -500,9 +551,21 @@ class StockAPI {
     agentIds: number[],
     analysisRounds: number = 2,
     debateRounds: number = 1,
-    candidateContext?: string
-  ): Promise<{ job_id: string; name: string }> {
-    const data = await this.request<{ success: boolean; data: { job_id: string; name: string } }>('/api/ai/debate/start_multi', {
+    candidateContext?: string,
+    strategyProfile?: {
+      strategy?: string;
+      label?: string;
+      holding_horizon?: string;
+      entry_window?: string;
+      exit_plan?: string;
+      decision_lens?: string;
+      candidate_summary?: string;
+    }
+  ): Promise<{ job_id: string; name: string; strategy?: string; holding_horizon?: string }> {
+    const data = await this.request<{
+      success: boolean;
+      data: { job_id: string; name: string; strategy?: string; holding_horizon?: string };
+    }>('/api/ai/debate/start_multi', {
       method: 'POST',
       body: JSON.stringify({
         codes,
@@ -510,6 +573,7 @@ class StockAPI {
         analysis_rounds: analysisRounds,
         debate_rounds: debateRounds,
         candidate_context: candidateContext,
+        strategy_profile: strategyProfile,
       }),
     });
     return data.data;

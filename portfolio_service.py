@@ -34,6 +34,84 @@ STYLE_META = {
 
 RISK_LEVELS = {'conservative', 'balanced', 'aggressive'}
 
+# A股卖出手续费：万五，单笔最低5元
+SELL_FEE_RATE = 0.0005
+SELL_FEE_MIN = 5.0
+
+
+def calc_sell_fee(price: float, quantity: int) -> float:
+    """计算卖出手续费：成交额 * 万五，最低5元。"""
+    amount = float(price) * int(quantity)
+    if amount <= 0:
+        return 0.0
+    return round(max(amount * SELL_FEE_RATE, SELL_FEE_MIN), 2)
+
+
+def apply_sell_trade(db, position: Position, quantity: int, price: float) -> dict:
+    """
+    执行卖出：
+    - 扣减总持仓与今日可卖
+    - 剩余持仓成本价不变
+    - 现金增加 = 成交额 - 手续费
+    - 卖光则删除持仓
+    """
+    quantity = int(quantity)
+    price = float(price)
+    if quantity <= 0:
+        raise ValueError('卖出数量必须大于0')
+    if price <= 0:
+        raise ValueError('卖出价格必须大于0')
+    if quantity > position.available_quantity:
+        raise ValueError(f'卖出数量不能超过今日可卖 {position.available_quantity} 股')
+    if quantity > position.quantity:
+        raise ValueError(f'卖出数量不能超过总持仓 {position.quantity} 股')
+
+    profile = get_or_create_profile(db)
+    code = position.code
+    name = position.name
+    avg_cost = position.avg_cost
+    gross = round(price * quantity, 2)
+    fee = calc_sell_fee(price, quantity)
+    net = round(gross - fee, 2)
+    cost_basis = round(avg_cost * quantity, 2)
+    realized_pnl = round(net - cost_basis, 2)
+
+    remaining_qty = position.quantity - quantity
+    remaining_available = position.available_quantity - quantity
+    deleted = False
+    if remaining_qty <= 0:
+        db.delete(position)
+        deleted = True
+    else:
+        position.quantity = remaining_qty
+        position.available_quantity = remaining_available
+
+    profile.available_cash = round(max(0.0, (profile.available_cash or 0.0) + net), 2)
+    db.commit()
+    if not deleted:
+        db.refresh(position)
+    db.refresh(profile)
+
+    return {
+        'deleted': deleted,
+        'position': None if deleted else serialize_position(position),
+        'trade': {
+            'code': code,
+            'name': name,
+            'quantity': quantity,
+            'price': price,
+            'gross_amount': gross,
+            'fee_rate': SELL_FEE_RATE,
+            'fee_min': SELL_FEE_MIN,
+            'fee': fee,
+            'net_amount': net,
+            'cost_basis': cost_basis,
+            'realized_pnl': realized_pnl,
+            'remaining_quantity': 0 if deleted else remaining_qty,
+            'available_cash': profile.available_cash,
+        },
+    }
+
 
 def get_or_create_profile(db) -> TradingProfile:
     profile = db.query(TradingProfile).filter(TradingProfile.id == 1).first()
@@ -170,10 +248,17 @@ def build_ai_portfolio_context(db, code: Optional[str] = None) -> str:
         f"总仓位上限: {profile.max_total_position_pct:.1f}%",
         f"默认止损/止盈: {profile.default_stop_loss_pct:.1f}% / {profile.default_take_profit_pct:.1f}%",
         f"允许日内做T: {'是' if profile.allow_intraday_t else '否'}",
-        f"可用现金: {summary['available_cash']:.2f}元",
-        f"估算总资产: {summary['total_assets']:.2f}元",
-        f"持仓市值/总仓位: {summary['total_market_value']:.2f}元 / {summary['total_position_pct']:.1f}%",
-        f"可用于新开仓: {summary['available_for_new_position']:.2f}元",
+        '【账户资金（勿混淆）】',
+        f"可用现金(账户现金余额): {summary['available_cash']:.2f}元",
+        f"持仓市值: {summary['total_market_value']:.2f}元",
+        f"估算总资产(=可用现金+持仓市值): {summary['total_assets']:.2f}元",
+        f"当前总仓位: {summary['total_position_pct']:.1f}%",
+        f"总仓位上限下剩余容量: {summary['remaining_position_capacity']:.2f}元",
+        (
+            f"受总仓位约束后的可新开仓额度(=min(可用现金, 剩余容量)): "
+            f"{summary['available_for_new_position']:.2f}元"
+        ),
+        '注意: “可新开仓额度”不是可用现金；可用现金以“可用现金(账户现金余额)”为准。',
     ]
     if not summary['market_data_complete']:
         lines.append('注意: 部分持仓实时行情缺失，组合市值与仓位为不完整估算。')

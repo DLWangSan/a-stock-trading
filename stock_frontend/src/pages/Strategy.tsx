@@ -3,7 +3,7 @@ import { stockAPI } from '../services/api';
 import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { getDefaultAgentIds } from '../utils/agentSelection';
+import { getDefaultAgentIds, STRATEGY_LABELS } from '../utils/agentSelection';
 import type { FourLightsCandidate, FourLightsRun, FourLightsScan, OvernightCandidate, OvernightScan } from '../services/api';
 
 interface StrongStock {
@@ -95,10 +95,10 @@ export default function Strategy() {
 
   useEffect(() => {
     if (showMultiModal && !prevShowMultiModalRef.current && agents && agents.length > 0) {
-      setSelectedAgentIds(getDefaultAgentIds(agents));
+      setSelectedAgentIds(getDefaultAgentIds(agents, 5, activeStrategy));
     }
     prevShowMultiModalRef.current = showMultiModal;
-  }, [showMultiModal, agents]);
+  }, [showMultiModal, agents, activeStrategy]);
 
   const formatNumber = (num: number | null | undefined): string => {
     if (num === null || num === undefined) return '-';
@@ -217,13 +217,44 @@ export default function Strategy() {
               + `评分${stock.score}，持有周期隔夜至次日早盘，卖出计划：${stock.sell_plan}`
             ))
             .join('\n')
-          : undefined;
+          : data?.stocks
+            .filter((stock) => selectedCodes.includes(stock.code))
+            .map((stock) => (
+              `${stock.rank}. ${stock.name}(${stock.code})：强势评分${stock.score}，`
+              + `连板${stock.consecutive_days}，T-1涨停${stock.t1_limit_time || '-'}，`
+              + `T-2涨停${stock.t2_limit_time || '-'}，建议1至3日接力`
+            ))
+            .join('\n');
+      const strategyProfile = {
+        strategy: activeStrategy,
+        label: STRATEGY_LABELS[activeStrategy],
+        holding_horizon:
+          activeStrategy === 'overnight'
+            ? '隔夜至次日早盘'
+            : activeStrategy === 'four_lights'
+              ? '1至5个交易日'
+              : '1至3个交易日，偏超短接力',
+        entry_window:
+          activeStrategy === 'overnight'
+            ? '更适合14:20后复核执行'
+            : activeStrategy === 'four_lights'
+              ? '三灯以上共振时分批介入'
+              : '确认强势延续后再介入',
+        exit_plan:
+          activeStrategy === 'overnight'
+            ? '次日集合竞价或开盘优先卖出；高开冲高乏力减仓，低开弱势直接止损'
+            : activeStrategy === 'four_lights'
+              ? '达到目标或关键灯熄灭后减仓；最长持有不超过5个交易日'
+              : '次日冲高优先兑现；转弱立刻降仓，不恋战',
+        candidate_summary: candidateContext,
+      };
       const res = await stockAPI.startMultiSelectDebate(
         selectedCodes,
         selectedAgentIds,
         modeConfig.analysisRounds,
         modeConfig.debateRounds,
-        candidateContext
+        candidateContext,
+        strategyProfile
       );
       setShowMultiModal(false);
       const params = new URLSearchParams();
@@ -652,7 +683,9 @@ export default function Strategy() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">多选一 AI分析</h2>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                策略多选一 · {STRATEGY_LABELS[activeStrategy] || '通用'}
+              </h2>
               <button
                 onClick={() => {
                   setShowMultiModal(false);
@@ -667,7 +700,8 @@ export default function Strategy() {
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               <div className="text-sm text-gray-600 dark:text-gray-400">
-                系统将给出1只主选、最多1只备选；机会不足时可以明确选择暂不交易。
+                本次按「{STRATEGY_LABELS[activeStrategy]}」约束选股：会把持有周期、退出计划和策略硬约束注入全部 Agent。
+                系统必须给出1只主选，最多1只备选；若机会偏弱，可建议观望或等待触发，但仍必须选出相对最优的一只。
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -717,7 +751,7 @@ export default function Strategy() {
                 {agents && agents.length > 0 && (
                   <div className="mb-3 flex flex-wrap gap-2">
                     <button
-                      onClick={() => setSelectedAgentIds(getDefaultAgentIds(agents))}
+                      onClick={() => setSelectedAgentIds(getDefaultAgentIds(agents, 5, activeStrategy))}
                       className="rounded bg-purple-100 px-2 py-1 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
                     >
                       核心5个

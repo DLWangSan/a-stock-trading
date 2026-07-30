@@ -11,6 +11,7 @@ from models import Position, SessionLocal, Watchlist
 from portfolio_service import (
     RISK_LEVELS,
     STYLE_META,
+    apply_sell_trade,
     build_portfolio_snapshot,
     get_or_create_profile,
     serialize_position,
@@ -199,6 +200,28 @@ def register_portfolio_routes(app):
             db.refresh(position)
             _sync_positions_to_watchlist(db)
             return jsonify({'success': True, 'data': serialize_position(position)})
+        except ValueError as e:
+            db.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 400
+        except Exception as e:
+            db.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+        finally:
+            db.close()
+
+    @app.route('/api/portfolio/positions/<int:position_id>/sell', methods=['POST'])
+    def sell_position_api(position_id):
+        """卖出持仓：万五手续费、最低5元；回笼现金；成本价对剩余股数不变。"""
+        db = SessionLocal()
+        try:
+            position = db.query(Position).filter(Position.id == position_id).first()
+            if not position:
+                return jsonify({'success': False, 'error': '持仓不存在'}), 404
+            data = request.get_json(silent=True) or {}
+            quantity = int(data.get('quantity') or 0)
+            price = float(data.get('price') or 0)
+            result = apply_sell_trade(db, position, quantity, price)
+            return jsonify({'success': True, 'data': result})
         except ValueError as e:
             db.rollback()
             return jsonify({'success': False, 'error': str(e)}), 400

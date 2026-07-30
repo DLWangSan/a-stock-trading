@@ -31,6 +31,12 @@ from overnight_strategy import scan_overnight
 from market_context_service import build_market_sentiment_context
 from portfolio_service import build_ai_portfolio_context
 from strategy_scorer import rank_strong_stocks
+from strategy_multi_select import (
+    build_strategy_decision_prompt,
+    build_strategy_multi_instruction,
+    build_strategy_profile,
+    format_strategy_brief,
+)
 from strategy_signal_service import (
     delete_all_signal_runs,
     delete_signal_run,
@@ -1074,6 +1080,7 @@ def register_routes(app):
         debate_rounds,
         override_api_key=None,
         candidate_context='',
+        strategy_profile=None,
     ):
         db = SessionLocal()
         try:
@@ -1119,16 +1126,16 @@ def register_routes(app):
 
             combined_data = "\n\n".join(stock_blocks)
             portfolio_context = build_ai_portfolio_context(db)
-            multi_instruction = (
-                "Choose one primary candidate and at most one backup candidate. "
-                "If no candidate has a favorable risk/reward ratio, explicitly choose NO TRADE. "
-                "Provide your preference and reasoning from your unique perspective."
+            profile = build_strategy_profile(
+                (strategy_profile or {}).get('strategy') if isinstance(strategy_profile, dict) else None,
+                candidate_lines=[candidate_context] if candidate_context else None,
+                extra=strategy_profile if isinstance(strategy_profile, dict) else None,
             )
-            score_context = (
-                f"Pre-screening quantitative score summary:\n{candidate_context}\n\n"
-                if candidate_context
-                else ''
-            )
+            if candidate_context and not profile.get('candidate_summary'):
+                profile['candidate_summary'] = candidate_context
+            strategy_brief = format_strategy_brief(profile)
+            multi_instruction = build_strategy_multi_instruction(profile)
+            score_context = f"{strategy_brief}\n\n"
 
             def resolve_agent_config(agent):
                 provider = agent.ai_provider or get_config(db, 'default_ai_provider', 'openai')
@@ -1158,12 +1165,13 @@ def register_routes(app):
                         agent,
                         f"{agent.prompt}\n\n"
                         f"{current_time_info}\n\n"
-                        "Multi-Stock Selection Task:\n"
+                        "Strategy-Aware Multi-Stock Selection Task:\n"
                         f"{score_context}"
                         f"{combined_data}\n\n"
                         f"{portfolio_context}\n\n"
                         f"{multi_instruction}\n\n"
                         f"Round {round_idx} Analysis:\n"
+                        "Evaluate each candidate only within the strategy holding horizon and exit plan. "
                         "Provide new insights and clearly state your preferred stock.\n\n"
                         f"Previous Analysis (if any):\n{prev_analysis}\n\n"
                         "Please provide your analysis in Chinese."
@@ -1222,13 +1230,14 @@ def register_routes(app):
                         agent,
                         f"{agent.prompt}\n\n"
                         f"{current_time_info}\n\n"
-                        "You are participating in a multi-agent debate for a multi-stock selection task.\n"
+                        "You are participating in a multi-agent debate for a strategy-aware multi-stock selection task.\n"
                         f"{multi_instruction}\n\n"
                         f"{score_context}"
                         f"Current candidate data:\n{combined_data}\n\n"
                         f"{portfolio_context}\n\n"
                         f"Debate Round {round_idx}:\n"
-                        "Respond with counterarguments and emphasize your preferred stock.\n\n"
+                        "Challenge opinions that ignore the strategy holding horizon or exit plan. "
+                        "Emphasize your preferred stock only if it fits this strategy.\n\n"
                         f"Other agents' latest analyses:\n{other_latest}\n\n"
                         f"Recent Debate History:\n{recent_debate}\n\n"
                         "Please provide your debate response in Chinese."
@@ -1268,20 +1277,12 @@ def register_routes(app):
                 for item in steps
             ])
 
-            decision_prompt = (
-                "You are a disciplined senior trader and final portfolio decision maker.\n"
-                "Choose ONE primary candidate and at most ONE backup candidate. "
-                "You MUST choose NO TRADE when the setup or portfolio capacity is inadequate.\n"
-                "Be decisive and action-oriented, but never invent missing evidence.\n\n"
-                f"{score_context}"
-                f"Candidates:\n{combined_data}\n\n"
-                f"{portfolio_context}\n\n"
-                f"Debate Transcript:\n{transcript}\n\n"
-                "Output a Markdown report with sections: Market Decision, Primary Candidate, "
-                "Backup Candidate, Portfolio Allocation, Entry Plan, Risk Control. "
-                "For each actionable candidate include entry range, position percentage and amount, "
-                "stop loss, take profit, validity period and invalidation conditions.\n"
-                "Please output in Chinese."
+            decision_prompt = build_strategy_decision_prompt(
+                profile,
+                strategy_brief,
+                combined_data,
+                portfolio_context,
+                transcript,
             )
 
             try:
@@ -1290,7 +1291,7 @@ def register_routes(app):
                     'phase': 'debate',
                     'round': debate_rounds + 1,
                     'agent_id': 0,
-                    'agent_name': "裁判（决策）",
+                    'agent_name': "裁判（策略决策）",
                     'content': report_md,
                     'timestamp': datetime.now().isoformat()
                 })
@@ -1568,6 +1569,14 @@ def register_routes(app):
             debate_rounds = int(data.get('debate_rounds', 1))
             override_api_key = data.get('override_api_key')
             candidate_context = str(data.get('candidate_context') or '')[:12000]
+            strategy_profile = data.get('strategy_profile')
+            if strategy_profile is not None and not isinstance(strategy_profile, dict):
+                return jsonify({'success': False, 'error': 'strategy_profile 必须是对象'}), 400
+            strategy_profile = build_strategy_profile(
+                (strategy_profile or {}).get('strategy') if strategy_profile else data.get('strategy'),
+                candidate_lines=[candidate_context] if candidate_context else None,
+                extra=strategy_profile,
+            )
 
             if not isinstance(codes, list) or len(codes) < 2:
                 return jsonify({'success': False, 'error': '至少需要选择2只股票'}), 400
@@ -1578,14 +1587,21 @@ def register_routes(app):
                 return jsonify({'success': False, 'error': '股票代码格式错误'}), 400
 
             job_id = str(uuid.uuid4())
-            job_name = f"多选一: {'/'.join(codes)} {datetime.now().strftime('%Y-%m-%d')}"
+            strategy_label = strategy_profile.get('label') or '通用多选一'
+            job_name = f"{strategy_label}: {'/'.join(codes)} {datetime.now().strftime('%Y-%m-%d')}"
             job_code = ",".join(codes)
 
             db = next(get_db())
             try:
                 create_debate_job(
                     db, job_id, job_code, job_name, agent_ids, analysis_rounds, debate_rounds,
-                    meta={'mode': 'multi_select', 'codes': codes}
+                    meta={
+                        'mode': 'strategy_multi_select' if strategy_profile.get('strategy') != 'general' else 'multi_select',
+                        'codes': codes,
+                        'strategy': strategy_profile.get('strategy'),
+                        'strategy_label': strategy_label,
+                        'holding_horizon': strategy_profile.get('holding_horizon'),
+                    }
                 )
             finally:
                 db.close()
@@ -1600,12 +1616,21 @@ def register_routes(app):
                     debate_rounds,
                     override_api_key,
                     candidate_context,
+                    strategy_profile,
                 ),
                 daemon=True
             )
             thread.start()
 
-            return jsonify({'success': True, 'data': {'job_id': job_id, 'name': job_name}})
+            return jsonify({
+                'success': True,
+                'data': {
+                    'job_id': job_id,
+                    'name': job_name,
+                    'strategy': strategy_profile.get('strategy'),
+                    'holding_horizon': strategy_profile.get('holding_horizon'),
+                }
+            })
         except Exception as e:
             error_msg = str(e)
             print(f"[API] 启动多选一辩论任务失败: {error_msg}")
