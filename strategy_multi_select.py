@@ -4,6 +4,8 @@
 
 from typing import Any, Dict, List, Optional
 
+from portfolio_service import A_SHARE_LOT_RULES
+
 
 STRATEGY_PROFILES: Dict[str, Dict[str, Any]] = {
     'general': {
@@ -20,6 +22,7 @@ STRATEGY_PROFILES: Dict[str, Dict[str, Any]] = {
             '必须给出唯一主选标的，禁止用暂不交易代替选股',
             '若认为当下不宜开仓，仍须选出相对最优主选，并明确建议观望/轻仓/等待触发',
             '不得建议卖出超过可卖数量，仓位必须符合总仓位上限与可用现金',
+            A_SHARE_LOT_RULES,
         ],
         'decision_lens': '比较候选的综合质量，不预设超短或隔夜偏好',
         'preferred_agents': [
@@ -53,6 +56,7 @@ STRATEGY_PROFILES: Dict[str, Dict[str, Any]] = {
             '必须给出唯一主选标的，禁止结论停在暂不交易',
             '高位加速但情绪退潮时，主选仍要给出，操作态度可改为观望等待确认',
             '单票仓位从严，优先考虑可卖与隔日风险',
+            A_SHARE_LOT_RULES,
         ],
         'decision_lens': '优先选情绪延续最强、且次日仍有兑现空间的标的',
         'preferred_agents': [
@@ -86,6 +90,7 @@ STRATEGY_PROFILES: Dict[str, Dict[str, Any]] = {
             '必须给出唯一主选标的，禁止用暂不交易代替选股',
             '观察候选也可成为主选，但要写清为何相对最优',
             '缺少趋势确认时可建议轻仓或等待触发，但仍须保留主选',
+            A_SHARE_LOT_RULES,
         ],
         'decision_lens': '优先选灯数高且结构更完整、适合1至5日持有的标的',
         'preferred_agents': [
@@ -119,6 +124,7 @@ STRATEGY_PROFILES: Dict[str, Dict[str, Any]] = {
             '必须给出唯一主选标的，禁止结论停在暂不交易',
             '默认不做中线演绎，只评估隔夜到次日早盘',
             '若隔夜赔率一般，仍须选出相对最优主选，并明确建议观望或极小仓试错条件',
+            A_SHARE_LOT_RULES,
         ],
         'decision_lens': '优先选隔夜赔率最好、次日最好卖的标的，而不是中线空间最大的票',
         'preferred_agents': [
@@ -203,6 +209,7 @@ def format_strategy_brief(profile: Dict[str, Any]) -> str:
         constraints,
         '选股强制要求：必须明确唯一主选股票代码与名称；允许建议“观望/等待触发/轻仓”，',
         '但禁止把最终结论写成暂不交易或 NO TRADE 来回避选股。',
+        f'交易单位：{A_SHARE_LOT_RULES}',
         f'最终报告必须覆盖：{sections}',
         '候选量化摘要：',
         candidate_summary,
@@ -252,5 +259,7 @@ def build_strategy_decision_prompt(
         "In 主选标的（必选）, always include: code, name, why it is the relative best under this strategy, "
         "and whether current action stance is 可执行买入 / 等待触发 / 仅观察. "
         "Also include entry range, suggested position percentage and amount, stop loss, take profit, "
-        "exact sell timing, validity period and invalidation conditions."
+        "exact sell timing, validity period and invalidation conditions. "
+        "Quantity suggestions must follow A-share lot rules: 1 lot = 100 shares; "
+        "never suggest odd lots like 50 shares except when clearing remaining odd shares."
     )

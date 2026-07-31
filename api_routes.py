@@ -1380,7 +1380,10 @@ def register_routes(app):
                 "This is a portfolio-level decision, not an isolated stock recommendation. "
                 "Evaluate market regime, account cash and total exposure, concentration, every holding's trend, "
                 "profit/loss and available quantity. Give prioritized account actions for today. "
-                "Do not force a trade and do not suggest selling more than available quantity."
+                "Do not force a trade and do not suggest selling more than available quantity. "
+                "A-share lot rule: 1 lot = 100 shares. Buy/add and partial sell suggestions must be whole lots "
+                "(at least 1 lot). Never suggest odd quantities like 50 shares; only allow odd lots when "
+                "clearing all remaining available shares under 100."
             )
             prompts = [
                 (
@@ -1438,8 +1441,10 @@ def register_routes(app):
                 "Reconcile the agent opinions with actual account constraints and current market sentiment.\n"
                 "Required sections: 市场环境、账户体检、持仓逐只操作表、操作优先级、现金与仓位安排、"
                 "做T计划、风险与失效条件。\n"
-                "The holding table must include current position percentage, action, quantity or percentage change, "
-                "price trigger, stop loss, take profit and validity period. NO TRADE is allowed.\n\n"
+                "The holding table must include current position percentage, action, quantity or percentage change "
+                "(prefer 手 / lots of 100 shares), "
+                "price trigger, stop loss, take profit and validity period. NO TRADE is allowed. "
+                "Never suggest non-lot quantities such as 50 shares.\n\n"
                 f"{market_context}\n\n{portfolio_context}\n\n"
                 f"All Holding Market Data:\n{holding_market_data}\n\n"
                 f"Agent Opinions:\n{transcript}"

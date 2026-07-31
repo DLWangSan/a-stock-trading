@@ -34,9 +34,18 @@ STYLE_META = {
 
 RISK_LEVELS = {'conservative', 'balanced', 'aggressive'}
 
+# A股交易单位：1手 = 100股
+LOT_SIZE = 100
+
 # A股卖出手续费：万五，单笔最低5元
 SELL_FEE_RATE = 0.0005
 SELL_FEE_MIN = 5.0
+
+A_SHARE_LOT_RULES = (
+    'A股交易单位：1手=100股。买入/加仓建议数量必须按手（100的整数倍），且至少1手；'
+    '减仓/做T卖出除“一次性清掉全部可卖（含不足1手零股）”外，也必须按手，'
+    '禁止出现50股、30股这类非整手建议；数量表述优先用手（如2手=200股）。'
+)
 
 
 def calc_sell_fee(price: float, quantity: int) -> float:
@@ -47,6 +56,33 @@ def calc_sell_fee(price: float, quantity: int) -> float:
     return round(max(amount * SELL_FEE_RATE, SELL_FEE_MIN), 2)
 
 
+def validate_sell_quantity(quantity: int, available_quantity: int, total_quantity: Optional[int] = None) -> int:
+    """
+    校验卖出数量：
+    - 卖出全部可卖（含零股清仓）允许
+    - 部分卖出必须按手，至少1手（100股）
+    """
+    quantity = int(quantity)
+    available_quantity = int(available_quantity)
+    if quantity <= 0:
+        raise ValueError('卖出数量必须大于0')
+    if available_quantity <= 0:
+        raise ValueError('今日无可卖数量')
+    if quantity > available_quantity:
+        raise ValueError(f'卖出数量不能超过今日可卖 {available_quantity} 股')
+    if total_quantity is not None and quantity > int(total_quantity):
+        raise ValueError(f'卖出数量不能超过总持仓 {int(total_quantity)} 股')
+    if quantity == available_quantity:
+        return quantity
+    if quantity < LOT_SIZE:
+        raise ValueError(
+            f'部分卖出至少1手（{LOT_SIZE}股）；不足1手请一次性卖出全部可卖 {available_quantity} 股'
+        )
+    if quantity % LOT_SIZE != 0:
+        raise ValueError(f'部分卖出数量必须是{LOT_SIZE}股的整数倍（按手卖出）')
+    return quantity
+
+
 def apply_sell_trade(db, position: Position, quantity: int, price: float) -> dict:
     """
     执行卖出：
@@ -55,16 +91,14 @@ def apply_sell_trade(db, position: Position, quantity: int, price: float) -> dic
     - 现金增加 = 成交额 - 手续费
     - 卖光则删除持仓
     """
-    quantity = int(quantity)
+    quantity = validate_sell_quantity(
+        quantity,
+        position.available_quantity,
+        position.quantity,
+    )
     price = float(price)
-    if quantity <= 0:
-        raise ValueError('卖出数量必须大于0')
     if price <= 0:
         raise ValueError('卖出价格必须大于0')
-    if quantity > position.available_quantity:
-        raise ValueError(f'卖出数量不能超过今日可卖 {position.available_quantity} 股')
-    if quantity > position.quantity:
-        raise ValueError(f'卖出数量不能超过总持仓 {position.quantity} 股')
 
     profile = get_or_create_profile(db)
     code = position.code
@@ -274,9 +308,12 @@ def build_ai_portfolio_context(db, code: Optional[str] = None) -> str:
             holding_days = (datetime.now() - opened_at).days if opened_at else None
             days_text = f'{holding_days}天' if holding_days is not None else '未知'
             target_mark = ' [当前分析标的]' if code and item['code'] == code else ''
+            lots = item['quantity'] / LOT_SIZE
+            avail_lots = item['available_quantity'] / LOT_SIZE
             lines.append(
-                f"- {item['name']}({item['code']}){target_mark}: 总持仓{item['quantity']}股, "
-                f"今日可卖{item['available_quantity']}股, 成本{item['avg_cost']:.2f}, "
+                f"- {item['name']}({item['code']}){target_mark}: "
+                f"总持仓{item['quantity']}股({lots:g}手), "
+                f"今日可卖{item['available_quantity']}股({avail_lots:g}手), 成本{item['avg_cost']:.2f}, "
                 f"现价{item['current_price'] if item['current_price'] is not None else '缺失'}, "
                 f"浮盈亏{item['profit_pct'] if item['profit_pct'] is not None else '缺失'}%, "
                 f"仓位{item['position_pct'] if item['position_pct'] is not None else '缺失'}%, "
@@ -292,6 +329,8 @@ def build_ai_portfolio_context(db, code: Optional[str] = None) -> str:
         '输出要求:',
         '- 给出明确动作：买入/加仓/持有/减仓/清仓/做T/暂不交易。',
         '- 必须给出价格区间、建议数量或仓位、止损、止盈、建议有效期和失效条件。',
+        f'- {A_SHARE_LOT_RULES}',
+        '- 按仓位百分比换算股数时，必须向下取整到整手；若折合不足1手，应改为观望或说明资金不够开仓。',
         '- A股实行T+1；做T卖出数量不得超过“今日可卖”数量。',
         '- 明确不等于强制交易；证据不足时可暂不交易，但必须写出等待的触发条件。',
     ])

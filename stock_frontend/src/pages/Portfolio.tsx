@@ -27,6 +27,7 @@ const emptyForm = {
 
 const SELL_FEE_RATE = 0.0005;
 const SELL_FEE_MIN = 5;
+const LOT_SIZE = 100;
 
 function money(value?: number | null) {
   if (value == null || Number.isNaN(value)) return '--';
@@ -37,6 +38,30 @@ function calcSellFee(price: number, quantity: number) {
   const amount = price * quantity;
   if (!amount || amount <= 0) return 0;
   return Math.max(amount * SELL_FEE_RATE, SELL_FEE_MIN);
+}
+
+function formatLots(shares: number) {
+  const lots = shares / LOT_SIZE;
+  return Number.isInteger(lots) ? `${lots}手` : `${lots.toFixed(2)}手`;
+}
+
+function validateSellQuantity(quantity: number, available: number): string | null {
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    return '卖出数量必须是正整数';
+  }
+  if (quantity > available) {
+    return `卖出数量不能超过今日可卖 ${available} 股`;
+  }
+  if (quantity === available) {
+    return null;
+  }
+  if (quantity < LOT_SIZE) {
+    return `部分卖出至少1手（${LOT_SIZE}股）；不足1手请一次性卖出全部可卖 ${available} 股`;
+  }
+  if (quantity % LOT_SIZE !== 0) {
+    return `部分卖出数量必须是${LOT_SIZE}股的整数倍（按手卖出）`;
+  }
+  return null;
 }
 
 export default function PortfolioPage() {
@@ -125,22 +150,19 @@ export default function PortfolioPage() {
   const submitSell = async (position: Position) => {
     const quantity = Number(sellQuantity);
     const price = Number(sellPrice);
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      setError('卖出数量必须是正整数');
+    const lotError = validateSellQuantity(quantity, position.available_quantity);
+    if (lotError) {
+      setError(lotError);
       return;
     }
     if (!(price > 0)) {
       setError('卖出价格必须大于0');
       return;
     }
-    if (quantity > position.available_quantity) {
-      setError(`卖出数量不能超过今日可卖 ${position.available_quantity} 股`);
-      return;
-    }
     const fee = calcSellFee(price, quantity);
     const net = price * quantity - fee;
     if (!window.confirm(
-      `确认卖出 ${position.name} ${quantity} 股？\n`
+      `确认卖出 ${position.name} ${quantity} 股（${formatLots(quantity)}）？\n`
       + `成交价 ¥${price.toFixed(3)}，手续费 ¥${fee.toFixed(2)}（万五，最低5元）\n`
       + `预计回笼现金 ¥${net.toFixed(2)}；剩余持仓成本价不变。`,
     )) {
@@ -339,8 +361,8 @@ export default function PortfolioPage() {
         <form onSubmit={submitPosition} className="grid gap-4 md:grid-cols-4">
           <Field label="股票代码" value={form.code} required maxLength={6} onChange={(value) => setForm({ ...form, code: value })} />
           <Field label="股票名称（可留空）" value={form.name} onChange={(value) => setForm({ ...form, name: value })} />
-          <Field label="持仓数量" type="number" value={form.quantity} required onChange={(value) => setForm({ ...form, quantity: value })} />
-          <Field label="今日可卖" type="number" value={form.available_quantity} onChange={(value) => setForm({ ...form, available_quantity: value })} />
+          <Field label="持仓数量（股，建议整手）" type="number" step="100" value={form.quantity} required onChange={(value) => setForm({ ...form, quantity: value })} />
+          <Field label="今日可卖（股）" type="number" step="100" value={form.available_quantity} onChange={(value) => setForm({ ...form, available_quantity: value })} />
           <Field label="平均成本" type="number" step="0.001" value={form.avg_cost} required onChange={(value) => setForm({ ...form, avg_cost: value })} />
           <Field label="建仓日期" type="date" value={form.opened_at} onChange={(value) => setForm({ ...form, opened_at: value })} />
           <Field label="目标价" type="number" step="0.001" value={form.target_price} onChange={(value) => setForm({ ...form, target_price: value })} />
@@ -392,7 +414,10 @@ export default function PortfolioPage() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div className="text-lg font-semibold text-gray-900 dark:text-white">{position.name}</div>
-                  <div className="text-sm text-gray-500">{position.code} · 持仓 {position.quantity} 股 · 今日可卖 {position.available_quantity} 股</div>
+                  <div className="text-sm text-gray-500">
+                    {position.code} · 持仓 {position.quantity} 股（{formatLots(position.quantity)}）
+                    · 今日可卖 {position.available_quantity} 股（{formatLots(position.available_quantity)}）
+                  </div>
                 </div>
                 <div className={`text-right ${up ? 'text-red-600' : 'text-green-600'}`}>
                   <div className="text-xl font-bold">{money(position.current_price)}</div>
@@ -435,20 +460,42 @@ export default function PortfolioPage() {
               {sellingId === position.id && (
                 <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/20">
                   <div className="mb-3 text-sm font-medium text-rose-800 dark:text-rose-200">
-                    卖出 {position.name}（手续费万五，最低5元；剩余股数成本价不变）
+                    卖出 {position.name}（按手交易：1手=100股；手续费万五，最低5元；剩余股数成本价不变）
                   </div>
                   <div className="grid gap-3 sm:grid-cols-3">
                     <label className="text-sm text-gray-600 dark:text-gray-300">
-                      卖出数量（可卖 {position.available_quantity}）
+                      卖出数量（可卖 {position.available_quantity} 股 / {formatLots(position.available_quantity)}）
                       <input
                         type="number"
-                        min={1}
+                        min={position.available_quantity < LOT_SIZE ? position.available_quantity : LOT_SIZE}
                         max={position.available_quantity}
                         step={100}
                         value={sellQuantity}
                         onChange={(e) => setSellQuantity(e.target.value)}
                         className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
                       />
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {[LOT_SIZE, LOT_SIZE * 2, Math.floor(position.available_quantity / LOT_SIZE) * LOT_SIZE]
+                          .filter((qty, idx, arr) => qty > 0 && qty <= position.available_quantity && arr.indexOf(qty) === idx)
+                          .map((qty) => (
+                            <button
+                              key={qty}
+                              type="button"
+                              onClick={() => setSellQuantity(String(qty))}
+                              className="rounded border border-rose-200 px-2 py-0.5 text-xs text-rose-700 dark:border-rose-800 dark:text-rose-300"
+                            >
+                              {formatLots(qty)}
+                            </button>
+                          ))}
+                        <button
+                          type="button"
+                          onClick={() => setSellQuantity(String(position.available_quantity))}
+                          className="rounded border border-rose-200 px-2 py-0.5 text-xs text-rose-700 dark:border-rose-800 dark:text-rose-300"
+                        >
+                          全部可卖
+                        </button>
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500">部分卖出须整手；不足1手只能一次卖光可卖数量。</p>
                     </label>
                     <label className="text-sm text-gray-600 dark:text-gray-300">
                       卖出价格
